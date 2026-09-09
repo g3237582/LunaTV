@@ -171,8 +171,11 @@ const JASSUB_CJK_FONT_URL = `${JASSUB_ASSET_BASE}/NotoSansCJK-Regular.ttc`;
 const ADVANCED_SUBTITLE_FORMATS = new Set(['ass', 'ssa']);
 const BITSUB_SUBTITLE_FORMATS = new Set(['pgs', 'sup']);
 // libbitsub 以原生 ESM 形式自托管在 public/libbitsub/（由 next.config.js 从
-// node_modules 拷贝），运行时绕过 webpack 加载，避免 wasm 胶水被 swc 压缩破坏
-const BITSUB_MODULE_URL = '/libbitsub/dist/index.js';
+// node_modules 拷贝），运行时绕过 webpack 加载，避免 wasm 胶水被 swc 压缩破坏。
+// 注意必须运行时构造 URL：字面量 import('/libbitsub/...') 会被 OpenNext 的
+// esbuild 在 server 产物里当作可解析模块而报 Could not resolve
+const getBitsubModuleUrl = () =>
+  new URL('/libbitsub/dist/index.js', window.location.href).href;
 
 const isHlsPlaybackUrl = (url: string) =>
   /\.m3u8?(?:$|[/?#])/i.test(url) ||
@@ -2336,9 +2339,10 @@ function PlayPageClient() {
 
     clearBitsubSubtitle();
 
-    // webpackIgnore：让浏览器原生 import public/ 下的 ESM 模块图，webpack 不介入
+    // webpackIgnore：让浏览器原生 import public/ 下的 ESM 模块图，webpack 不介入；
+    // 非字面量参数同时也让 esbuild（OpenNext）/swc 无法静态分析，避免 Cloudflare 构建报错
     const { PgsRenderer } = (await import(
-      /* webpackIgnore: true */ BITSUB_MODULE_URL
+      /* webpackIgnore: true */ getBitsubModuleUrl()
     )) as typeof import('libbitsub');
 
     // loadSubtitles 内部吞掉异常并通过 onError 回调（loadSubtitles 的 catch 不向上抛），
