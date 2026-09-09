@@ -1,9 +1,15 @@
 'use client';
 
-import { Loader2, X } from 'lucide-react';
+import { Loader2, Sparkles, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import {
+  buildFilterTextFromRecognition,
+  type FansubRecognition,
+  type FansubRecognizeResult,
+  type FansubVariant,
+} from '@/lib/anime-fansub-recognize';
 import {
   ANIME_EXCLUDE_PRESETS,
   ANIME_FANSUB_PRESETS,
@@ -40,6 +46,9 @@ export default function AnimeSubscribeModal({
   const [visible, setVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [recognizing, setRecognizing] = useState(false);
+  const [recognizeError, setRecognizeError] = useState('');
+  const [recognition, setRecognition] = useState<FansubRecognizeResult | null>(null);
   const [form, setForm] = useState({
     title: '',
     filterText: '',
@@ -55,6 +64,8 @@ export default function AnimeSubscribeModal({
     if (isOpen) {
       setVisible(true);
       setError('');
+      setRecognizeError('');
+      setRecognition(null);
       setForm({
         title: initialTitle || '',
         filterText: '',
@@ -93,6 +104,46 @@ export default function AnimeSubscribeModal({
     setForm((prev) => ({
       ...prev,
       excludeText: applyExcludeSingleSelect(prev.excludeText, preset),
+    }));
+  };
+
+  /** 智能识别：按番剧名在当前源搜一次，对结果做字幕组 × 字幕形态分组 */
+  const handleRecognize = async () => {
+    const keyword = form.title.trim();
+    if (!keyword) {
+      setRecognizeError('请先填写番剧名称');
+      return;
+    }
+    try {
+      setRecognizing(true);
+      setRecognizeError('');
+      const res = await fetch('/api/admin/anime-subscription/recognize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: keyword, source: form.source }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '智能识别失败');
+      }
+      const data: FansubRecognizeResult = await res.json();
+      setRecognition(data);
+    } catch (e) {
+      setRecognition(null);
+      setRecognizeError(e instanceof Error ? e.message : '智能识别失败');
+    } finally {
+      setRecognizing(false);
+    }
+  };
+
+  /** 点击识别结果：将「字幕组&字幕形态」写入过滤关键词（替换） */
+  const applyRecognition = (fansub: FansubRecognition, variant: FansubVariant) => {
+    setForm((prev) => ({
+      ...prev,
+      filterText: buildFilterTextFromRecognition(
+        fansub.fansubFilter,
+        variant.filter
+      ),
     }));
   };
 
@@ -180,15 +231,87 @@ export default function AnimeSubscribeModal({
           </div>
 
           <div>
-            <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1'>
-              过滤关键词 *
-            </label>
+            <div className='flex items-center justify-between mb-1'>
+              <label className='block text-sm font-medium text-gray-700 dark:text-gray-300'>
+                过滤关键词 *
+              </label>
+              <button
+                type='button'
+                onClick={handleRecognize}
+                disabled={recognizing}
+                title='按番剧名搜索一次，识别字幕组与字幕形态'
+                className='flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border border-blue-300 dark:border-blue-500/60 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors disabled:opacity-50'
+              >
+                {recognizing ? (
+                  <Loader2 size={12} className='animate-spin' />
+                ) : (
+                  <Sparkles size={12} />
+                )}
+                智能识别
+              </button>
+            </div>
             <input
               value={form.filterText}
               onChange={(e) => setForm({ ...form, filterText: e.target.value })}
               className='w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm'
               placeholder='喵萌奶茶屋&简日双语'
             />
+            {recognizeError ? (
+              <p className='mt-1 text-xs text-red-600 dark:text-red-400'>
+                {recognizeError}
+              </p>
+            ) : null}
+            {recognition ? (
+              <div className='mt-2 rounded-lg border border-gray-200 dark:border-gray-700 p-2.5 space-y-2.5'>
+                <div className='flex items-center justify-between'>
+                  <p className='text-[11px] text-gray-500 dark:text-gray-400'>
+                    识别到 {recognition.total} 条种子，点击填入过滤关键词
+                  </p>
+                  <button
+                    type='button'
+                    onClick={() => setRecognition(null)}
+                    className='p-0.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200'
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+                {recognition.fansubs.length === 0 ? (
+                  <p className='text-xs text-gray-400'>搜索结果为空</p>
+                ) : (
+                  recognition.fansubs.map((fansub) => (
+                    <div key={fansub.fansub}>
+                      <div className='flex items-baseline gap-1.5'>
+                        <span className='text-xs font-medium text-gray-800 dark:text-gray-100'>
+                          {fansub.fansub}
+                        </span>
+                        <span className='text-[10px] text-gray-400'>
+                          {fansub.count} 条
+                        </span>
+                      </div>
+                      <div className='mt-1 flex flex-wrap gap-1.5'>
+                        {fansub.variants.map((variant) => (
+                          <button
+                            key={variant.id}
+                            type='button'
+                            title={variant.sampleTitle}
+                            onClick={() => applyRecognition(fansub, variant)}
+                            className={chipClass(
+                              form.filterText ===
+                                buildFilterTextFromRecognition(
+                                  fansub.fansubFilter,
+                                  variant.filter
+                                )
+                            )}
+                          >
+                            {variant.label} ×{variant.count}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            ) : null}
             <p className='mt-1 text-[11px] text-gray-400'>字幕组</p>
             <div className='mt-1.5 flex flex-wrap gap-1.5'>
               {ANIME_FANSUB_PRESETS.map((p) => (
