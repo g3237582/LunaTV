@@ -54,7 +54,7 @@ export interface EmbySubtitle {
   sourceFormat: string;
   codec?: string;
   isExternal?: boolean;
-  renderMode: 'native' | 'jassub';
+  renderMode: 'native' | 'jassub' | 'bitsub';
 }
 
 interface EmbyItemsResult {
@@ -582,7 +582,15 @@ export class EmbyClient {
   }
 
   private getSubtitleTargetFormat(sourceFormat: string): string {
-    return sourceFormat === 'ass' || sourceFormat === 'ssa' ? sourceFormat : 'vtt';
+    // pgs 为位图字幕，无法转成 vtt 文本，需以原始格式交给 libbitsub 渲染
+    if (
+      sourceFormat === 'ass' ||
+      sourceFormat === 'ssa' ||
+      sourceFormat === 'pgs'
+    ) {
+      return sourceFormat;
+    }
+    return 'vtt';
   }
 
   private buildSubtitleStreamUrl(
@@ -655,7 +663,12 @@ export class EmbyClient {
         const language = stream.Language || 'unknown';
         const sourceFormat = this.normalizeSubtitleFormat(stream.Codec, stream.DeliveryUrl);
         const targetFormat = this.getSubtitleTargetFormat(sourceFormat);
-        const renderMode = targetFormat === 'ass' || targetFormat === 'ssa' ? 'jassub' : 'native';
+        const renderMode =
+          targetFormat === 'pgs'
+            ? 'bitsub'
+            : targetFormat === 'ass' || targetFormat === 'ssa'
+              ? 'jassub'
+              : 'native';
         const label = stream.DisplayTitle || `${language} (${stream.Codec || targetFormat})`;
 
         subtitles.push({

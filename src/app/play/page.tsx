@@ -124,7 +124,7 @@ interface SearchCachePayload {
   updatedAt: number;
 }
 
-type CustomSubtitleEngine = 'native' | 'jassub';
+type CustomSubtitleEngine = 'native' | 'jassub' | 'bitsub';
 type PlaybackSourceBadge = 'local' | 'offline' | null;
 type HarmonyHlsPlaybackMode = 'hlsjs' | 'native';
 type NetdiskHlsPlaybackMode = 'hlsjs' | 'native';
@@ -136,6 +136,8 @@ interface CustomSubtitleState {
   engine: CustomSubtitleEngine;
   url?: string;
   content?: string;
+  /** bitsub 引擎（PGS 位图字幕）的原始二进制内容 */
+  binaryContent?: ArrayBuffer;
 }
 
 interface SourceSubtitleItem {
@@ -146,7 +148,11 @@ interface SourceSubtitleItem {
   format?: string;
   sourceFormat?: string;
   codec?: string;
-  renderMode?: 'native' | 'jassub';
+  renderMode?: 'native' | 'jassub' | 'bitsub';
+}
+
+interface BitsubRendererInstance {
+  dispose?: () => void;
 }
 
 interface JassubSubtitleInstance {
@@ -163,6 +169,10 @@ const JASSUB_ASSET_BASE = '/assets/jassub';
 const JASSUB_CJK_FONT_FAMILY = 'noto sans cjk sc';
 const JASSUB_CJK_FONT_URL = `${JASSUB_ASSET_BASE}/NotoSansCJK-Regular.ttc`;
 const ADVANCED_SUBTITLE_FORMATS = new Set(['ass', 'ssa']);
+const BITSUB_SUBTITLE_FORMATS = new Set(['pgs', 'sup']);
+// libbitsub 以原生 ESM 形式自托管在 public/libbitsub/（由 next.config.js 从
+// node_modules 拷贝），运行时绕过 webpack 加载，避免 wasm 胶水被 swc 压缩破坏
+const BITSUB_MODULE_URL = '/libbitsub/dist/index.js';
 
 const isHlsPlaybackUrl = (url: string) =>
   /\.m3u8?(?:$|[/?#])/i.test(url) ||
@@ -2107,6 +2117,7 @@ function PlayPageClient() {
   const customSubtitleInputRef = useRef<HTMLInputElement | null>(null);
   const customSubtitleRef = useRef<CustomSubtitleState | null>(null);
   const currentSubtitleLabelRef = useRef<string>('关闭');
+  const bitsubRendererRef = useRef<BitsubRendererInstance | null>(null);
 
   // Wake Lock 相关
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
@@ -2155,6 +2166,16 @@ function PlayPageClient() {
       isAdvancedSubtitleFormat(getSourceSubtitleFormat(subtitle));
   };
 
+  const isBitsubSourceSubtitle = (subtitle?: SourceSubtitleItem | null) => {
+    return subtitle?.renderMode === 'bitsub' ||
+      BITSUB_SUBTITLE_FORMATS.has(getSourceSubtitleFormat(subtitle));
+  };
+
+  // 位图字幕（PGS）无法走 Artplayer 原生 track / JASSUB，需要专用渲染器
+  const isCustomRendererSourceSubtitle = (subtitle?: SourceSubtitleItem | null) => {
+    return isAdvancedSourceSubtitle(subtitle) || isBitsubSourceSubtitle(subtitle);
+  };
+
   const getJassubSubtitleInstance = (): JassubSubtitleInstance | null => {
     return artPlayerRef.current?.plugins?.artplayerPluginJassub?.instance || null;
   };
@@ -2177,6 +2198,10 @@ function PlayPageClient() {
       clearJassubSubtitle();
     }
 
+    if (customSubtitle?.engine === 'bitsub') {
+      clearBitsubSubtitle();
+    }
+
     customSubtitleRef.current = null;
   };
 
@@ -2184,6 +2209,7 @@ function PlayPageClient() {
     if (!artPlayerRef.current) return;
 
     clearJassubSubtitle();
+    clearBitsubSubtitle();
     artPlayerRef.current.subtitle.switch(url, {
       name: label,
       type: 'vtt',
@@ -2199,6 +2225,7 @@ function PlayPageClient() {
 
     artPlayerRef.current.subtitle.show = false;
     clearJassubSubtitle();
+    clearBitsubSubtitle();
     currentSubtitleLabelRef.current = '关闭';
   };
 
@@ -2285,8 +2312,81 @@ function PlayPageClient() {
     currentSubtitleLabelRef.current = label;
   };
 
+  const clearBitsubSubtitle = () => {
+    const renderer = bitsubRendererRef.current;
+    if (!renderer) return;
+    bitsubRendererRef.current = null;
+    try {
+      renderer.dispose?.();
+    } catch (error) {
+      console.warn('[Subtitle] 清理位图字幕失败:', error);
+    }
+  };
+
+  // PgsRenderer 无 setTrack 换轨接口：切换位图字幕 = 销毁重建
+  const ensureBitsubRenderer = async (source: { url?: string; content?: ArrayBuffer }) => {
+    if (!source.url && !source.content) {
+      throw new Error('缺少位图字幕内容');
+    }
+
+    const video = artPlayerRef.current?.video;
+    if (!video) {
+      throw new Error('播放器尚未就绪');
+    }
+
+    clearBitsubSubtitle();
+
+    // webpackIgnore：让浏览器原生 import public/ 下的 ESM 模块图，webpack 不介入
+    const { PgsRenderer } = (await import(
+      /* webpackIgnore: true */ BITSUB_MODULE_URL
+    )) as typeof import('libbitsub');
+
+    // loadSubtitles 内部吞掉异常并通过 onError 回调（loadSubtitles 的 catch 不向上抛），
+    // 用该回调把加载失败转成 promise 拒绝，以便上层统一走 catch 处理
+    let rejectLoad: ((error: Error) => void) | null = null;
+    const loadFailure = new Promise<never>((_, reject) => {
+      rejectLoad = reject;
+    });
+
+    const renderer = new PgsRenderer({
+      video,
+      ...(source.content ? { subContent: source.content } : { subUrl: source.url }),
+      onError: (error: Error) => {
+        rejectLoad?.(error);
+        rejectLoad = null;
+      },
+    });
+
+    bitsubRendererRef.current = renderer as unknown as BitsubRendererInstance;
+    try {
+      // wasm 初始化 + 字幕数据索引完成（失败时回收实例）
+      await (renderer as any).waitUntilInitialized();
+      await loadFailure;
+    } catch (error) {
+      clearBitsubSubtitle();
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+    rejectLoad = null;
+    return renderer;
+  };
+
+  const switchBitsubSubtitle = async (source: { url?: string; content?: ArrayBuffer }, label: string) => {
+    if (!artPlayerRef.current) return;
+
+    artPlayerRef.current.subtitle.show = false;
+    clearJassubSubtitle();
+    await ensureBitsubRenderer(source);
+    currentSubtitleLabelRef.current = label;
+  };
+
   const switchSourceSubtitle = async (subtitle: SourceSubtitleItem) => {
     if (!subtitle.url) return;
+
+    // 位图字幕（PGS）：走 libbitsub 渲染器，无法降级为文本字幕
+    if (isBitsubSourceSubtitle(subtitle)) {
+      await switchBitsubSubtitle({ url: subtitle.url }, subtitle.label);
+      return;
+    }
 
     if (isAdvancedSourceSubtitle(subtitle)) {
       try {
@@ -2341,11 +2441,12 @@ function PlayPageClient() {
       { html: '上传本地字幕', action: 'upload' },
       ...sourceSubtitles.map((sub: SourceSubtitleItem) => {
         const isAdvanced = isAdvancedSourceSubtitle(sub);
+        const isBitsub = isBitsubSourceSubtitle(sub);
         const format = getSourceSubtitleFormat(sub);
         return {
           html: sub.label,
           action: 'switch',
-          engine: isAdvanced ? 'jassub' : 'native',
+          engine: isBitsub ? 'bitsub' : isAdvanced ? 'jassub' : 'native',
           url: sub.url,
           fallbackUrl: sub.fallbackUrl,
           fallbackFormat: sub.fallbackFormat,
@@ -2360,6 +2461,7 @@ function PlayPageClient() {
             engine: customSubtitle.engine,
             url: customSubtitle.url,
             content: customSubtitle.content,
+            binaryContent: customSubtitle.binaryContent,
           },
         ]
         : []),
@@ -2382,6 +2484,24 @@ function PlayPageClient() {
         if (item.action === 'upload') {
           customSubtitleInputRef.current?.click();
           return currentSubtitleLabelRef.current;
+        }
+
+        if (item.engine === 'bitsub') {
+          const switchPromise = item.binaryContent
+            ? switchBitsubSubtitle({ content: item.binaryContent }, item.html)
+            : item.url
+              ? switchBitsubSubtitle({ url: item.url }, item.html)
+              : Promise.resolve();
+
+          void switchPromise.catch((error) => {
+            console.warn('[Subtitle] 位图字幕切换失败:', error);
+            setToast({
+              message: error instanceof Error ? error.message : '位图字幕切换失败',
+              type: 'error',
+              onClose: () => setToast(null),
+            });
+          });
+          return item.html;
         }
 
         if (item.engine === 'jassub') {
@@ -2455,6 +2575,22 @@ function PlayPageClient() {
     updateSubtitleSetting();
   };
 
+  const loadBitsubCustomSubtitle = async (file: File, format: string) => {
+    const content = await file.arrayBuffer();
+    revokeCustomSubtitle();
+
+    customSubtitleRef.current = {
+      name: file.name,
+      format,
+      engine: 'bitsub',
+      binaryContent: content,
+      episodeIndex: currentEpisodeIndexRef.current,
+    };
+
+    await switchBitsubSubtitle({ content }, `本地：${file.name}`);
+    updateSubtitleSetting();
+  };
+
   const handleCustomSubtitleFileChange = async (
     event: React.ChangeEvent<HTMLInputElement>
   ) => {
@@ -2470,6 +2606,16 @@ function PlayPageClient() {
         await loadAdvancedCustomSubtitle(file, extension);
         setToast({
           message: `已加载高级字幕：${file.name}`,
+          type: 'success',
+          onClose: () => setToast(null),
+        });
+        return;
+      }
+
+      if (BITSUB_SUBTITLE_FORMATS.has(extension)) {
+        await loadBitsubCustomSubtitle(file, extension);
+        setToast({
+          message: `已加载位图字幕：${file.name}`,
           type: 'success',
           onClose: () => setToast(null),
         });
@@ -4121,6 +4267,8 @@ function PlayPageClient() {
   // 清理播放器资源的统一函数
   const cleanupPlayer = async () => {
     revokeCustomSubtitle();
+    // 位图字幕渲染器可能独立于 customSubtitle 存在（源字幕切换路径），兜底销毁
+    clearBitsubSubtitle();
 
     // 清除刷新定时器
     clearRefreshTimer();
@@ -7210,7 +7358,7 @@ function PlayPageClient() {
         // 获取当前集的字幕
         const currentSubtitles = (detailRef.current?.subtitles?.[currentEpisodeIndex] || []) as SourceSubtitleItem[];
         const defaultSubtitle = currentSubtitles[0];
-        const shouldUseNativeInitialSubtitle = !!defaultSubtitle && !isAdvancedSourceSubtitle(defaultSubtitle);
+        const shouldUseNativeInitialSubtitle = !!defaultSubtitle && !isCustomRendererSourceSubtitle(defaultSubtitle);
         const savedSubtitleSize = typeof window !== 'undefined' ? localStorage.getItem('subtitleSize') || '2em' : '2em';
         currentSubtitleLabelRef.current = defaultSubtitle?.label || '关闭';
 
@@ -8502,10 +8650,10 @@ function PlayPageClient() {
 
           applyProgressThumbConfig();
 
-          // 添加字幕切换和本地字幕上传功能；ASS/SSA 需要播放器 ready 后挂载 JASSUB
+          // 添加字幕切换和本地字幕上传功能；ASS/SSA/PGS 需要播放器 ready 后挂载专用渲染器
           const readySubtitles = (detailRef.current?.subtitles?.[currentEpisodeIndexRef.current] || []) as SourceSubtitleItem[];
           const readyDefaultSubtitle = readySubtitles[0];
-          if (readyDefaultSubtitle && isAdvancedSourceSubtitle(readyDefaultSubtitle)) {
+          if (readyDefaultSubtitle && isCustomRendererSourceSubtitle(readyDefaultSubtitle)) {
             void switchSourceSubtitle(readyDefaultSubtitle)
               .catch((error) => {
                 console.warn('[Subtitle] 高级字幕自动加载失败:', error);
