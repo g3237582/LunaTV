@@ -419,6 +419,8 @@ export interface AdminConfig {
       onePerEpisode?: boolean;
       /** 缺集重新检索（默认 false） */
       refillMissingEpisodes?: boolean;
+      /** 自定义集数提取正则（留空用内置规则，首个捕获组作为集数） */
+      episodeRegex?: string;
       lastCheckTime: number;
       lastEpisode: number;
       createdAt: number;
