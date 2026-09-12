@@ -101,6 +101,10 @@ function SourceSearchPageClient() {
   const [searchKeyword, setSearchKeyword] = useState<string>('');
   const [searchInputValue, setSearchInputValue] = useState<string>('');
   const [showBackToTop, setShowBackToTop] = useState(false);
+  // 视频源过滤：伸缩搜索框的展开状态与关键字
+  const [sourceFilter, setSourceFilter] = useState('');
+  const [isSourceFilterExpanded, setIsSourceFilterExpanded] = useState(false);
+  const sourceFilterInputRef = useRef<HTMLInputElement>(null);
   // 快照读取完成前不发请求，避免覆盖恢复的数据
   const [restoreChecked, setRestoreChecked] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement>(null);
@@ -437,6 +441,13 @@ function SourceSearchPageClient() {
     isHierarchical && selectedParentCategory
       ? getChildCategories(categories, selectedParentCategory)
       : [];
+  // 按名称过滤视频源
+  const sourceFilterKeyword = sourceFilter.trim().toLowerCase();
+  const filteredApiSites = sourceFilterKeyword
+    ? apiSites.filter((site) =>
+        site.name.toLowerCase().includes(sourceFilterKeyword)
+      )
+    : apiSites;
 
   return (
     <PageLayout activePath='/source-search'>
@@ -455,9 +466,47 @@ function SourceSearchPageClient() {
         <div className='max-w-4xl mx-auto mb-8 space-y-6'>
           {/* 源选择 CapsuleSwitch */}
           <div className='relative'>
-            <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3'>
-              选择视频源
-            </label>
+            <div className='flex items-center justify-between gap-3 mb-3'>
+              <label className='block text-sm font-medium text-gray-700 dark:text-gray-300'>
+                选择视频源
+              </label>
+              {/* 过滤视频源：伸缩搜索框 */}
+              <div
+                className={`flex items-center h-9 bg-gray-50/80 dark:bg-gray-800 border border-gray-200/50 dark:border-gray-700 rounded-lg shadow-sm transition-all duration-300 ease-in-out overflow-hidden ${
+                  isSourceFilterExpanded ? 'w-44 sm:w-56' : 'w-9'
+                }`}
+              >
+                <button
+                  type='button'
+                  aria-label='过滤视频源'
+                  onClick={() => {
+                    setIsSourceFilterExpanded(true);
+                    sourceFilterInputRef.current?.focus();
+                  }}
+                  className='flex-none w-9 h-9 flex items-center justify-center text-blue-500 hover:text-blue-600 transition-colors focus:outline-none focus-visible:outline-none'
+                >
+                  <Search size={18} />
+                </button>
+                <input
+                  ref={sourceFilterInputRef}
+                  type='text'
+                  value={sourceFilter}
+                  onChange={(e) => setSourceFilter(e.target.value)}
+                  onFocus={() => setIsSourceFilterExpanded(true)}
+                  // 内容为空失焦时收起搜索框
+                  onBlur={() => {
+                    if (!sourceFilter.trim()) setIsSourceFilterExpanded(false);
+                  }}
+                  placeholder='过滤视频源...'
+                  tabIndex={isSourceFilterExpanded ? 0 : -1}
+                  className={`w-full h-9 pr-3 text-sm bg-transparent border-0 focus:outline-none focus:ring-0 text-gray-700 dark:text-gray-300 placeholder:text-gray-400 dark:placeholder:text-gray-500 transition-opacity duration-300 ${
+                    isSourceFilterExpanded
+                      ? 'opacity-100'
+                      : 'opacity-0 pointer-events-none'
+                  }`}
+                />
+              </div>
+            </div>
             {isLoadingSources && apiSites.length === 0 ? (
               <div className='flex items-center justify-center h-12 bg-gray-50/80 rounded-lg border border-gray-200/50 dark:bg-gray-800 dark:border-gray-700'>
                 <Loader2 className='h-5 w-5 animate-spin text-gray-400' />
@@ -471,10 +520,16 @@ function SourceSearchPageClient() {
                   暂无可用源
                 </span>
               </div>
+            ) : filteredApiSites.length === 0 ? (
+              <div className='flex items-center justify-center h-12 bg-gray-50/80 rounded-lg border border-gray-200/50 dark:bg-gray-800 dark:border-gray-700'>
+                <span className='text-sm text-gray-500 dark:text-gray-400'>
+                  没有匹配的视频源
+                </span>
+              </div>
             ) : (
-              <div className='flex justify-center'>
+              <div className='flex'>
                 <CapsuleSwitch
-                  options={apiSites.map((site) => ({
+                  options={filteredApiSites.map((site) => ({
                     label: site.name,
                     value: site.key,
                   }))}
@@ -548,7 +603,7 @@ function SourceSearchPageClient() {
                     <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3'>
                       选择类型
                     </label>
-                    <div className='flex justify-center'>
+                    <div className='flex'>
                       <CapsuleSwitch
                         options={parentCategories.map((category) => ({
                           label: category.name,
@@ -564,7 +619,7 @@ function SourceSearchPageClient() {
                       <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3'>
                         选择分类
                       </label>
-                      <div className='flex justify-center'>
+                      <div className='flex'>
                         <CapsuleSwitch
                           options={subCategories.map((category) => ({
                             label: category.name,
@@ -582,7 +637,7 @@ function SourceSearchPageClient() {
                   <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3'>
                     选择分类
                   </label>
-                  <div className='flex justify-center'>
+                  <div className='flex'>
                     <CapsuleSwitch
                       options={categories.map((category) => ({
                         label: category.name,

@@ -521,7 +521,7 @@ function DuanjuPageClient() {
                 <div className='text-xs text-gray-500 dark:text-gray-400 mb-2 px-4'>
                   类型
                 </div>
-                <div className='flex justify-center mb-4'>
+                <div className='flex px-4 mb-4'>
                   <CapsuleSwitch
                     options={parentCategories.map((category) => ({
                       label: category.name,
@@ -536,7 +536,7 @@ function DuanjuPageClient() {
                     <div className='text-xs text-gray-500 dark:text-gray-400 mb-2 px-4'>
                       分类
                     </div>
-                    <div className='flex justify-center'>
+                    <div className='flex px-4'>
                       <CapsuleSwitch
                         options={subCategories.map((category) => ({
                           label: category.name,
@@ -554,7 +554,7 @@ function DuanjuPageClient() {
                 <div className='text-xs text-gray-500 dark:text-gray-400 mb-2 px-4'>
                   分类
                 </div>
-                <div className='flex justify-center'>
+                <div className='flex px-4'>
                   <CapsuleSwitch
                     options={flatCategories.map((category) => ({
                       label: category.name,
