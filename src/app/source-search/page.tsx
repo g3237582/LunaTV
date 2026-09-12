@@ -12,6 +12,13 @@ import {
 } from 'react';
 
 import { isAnimeCategoryText } from '@/lib/anime-keyword-expr';
+import {
+  CategoryNode,
+  getChildCategories,
+  getParentCategories,
+  isHierarchicalCategories,
+  pickDefaultSelection,
+} from '@/lib/category-tree';
 import { ApiSite } from '@/lib/config';
 import { appendSpecialSourceParam } from '@/lib/special-source.client';
 import { SearchResult } from '@/lib/types';
@@ -20,10 +27,7 @@ import CapsuleSwitch from '@/components/CapsuleSwitch';
 import PageLayout from '@/components/PageLayout';
 import VideoCard from '@/components/VideoCard';
 
-interface Category {
-  id: string;
-  name: string;
-}
+type Category = CategoryNode;
 
 type ViewMode = 'browse' | 'search';
 
@@ -34,6 +38,7 @@ interface SourceSearchSnapshot {
   apiSites: ApiSite[];
   selectedSource: string;
   categories: Category[];
+  selectedParentCategory: string;
   selectedCategory: string;
   videos: SearchResult[];
   currentPage: number;
@@ -84,6 +89,7 @@ function SourceSearchPageClient() {
   const [apiSites, setApiSites] = useState<ApiSite[]>([]);
   const [selectedSource, setSelectedSource] = useState<string>('');
   const [categories, setCategories] = useState<Category[]>([]);
+  const [selectedParentCategory, setSelectedParentCategory] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [videos, setVideos] = useState<SearchResult[]>([]);
   const [isLoadingSources, setIsLoadingSources] = useState(true);
@@ -114,6 +120,13 @@ function SourceSearchPageClient() {
       setApiSites(snapshot.apiSites);
       setSelectedSource(snapshot.selectedSource);
       setCategories(snapshot.categories);
+      // 旧快照没有一级分类时，从已选分类反推
+      setSelectedParentCategory(
+        snapshot.selectedParentCategory ||
+          snapshot.categories.find((item) => item.id === snapshot.selectedCategory)
+            ?.pid ||
+          ''
+      );
       setSelectedCategory(snapshot.selectedCategory);
       setVideos(snapshot.videos);
       setCurrentPage(snapshot.currentPage);
@@ -142,6 +155,7 @@ function SourceSearchPageClient() {
       apiSites,
       selectedSource,
       categories,
+      selectedParentCategory,
       selectedCategory,
       videos,
       // 当前页还在请求中，回退一页以便返回后重新拉取，避免缺页
@@ -156,6 +170,7 @@ function SourceSearchPageClient() {
     apiSites,
     selectedSource,
     categories,
+    selectedParentCategory,
     selectedCategory,
     videos,
     currentPage,
@@ -223,6 +238,7 @@ function SourceSearchPageClient() {
     const fetchCategories = async () => {
       setIsLoadingCategories(true);
       setCategories([]);
+      setSelectedParentCategory('');
       setSelectedCategory('');
       setVideos([]);
       setCurrentPage(1);
@@ -233,11 +249,12 @@ function SourceSearchPageClient() {
         );
         const data = await response.json();
         if (data.categories && Array.isArray(data.categories)) {
-          setCategories(data.categories);
-          // 默认选择第一个分类
-          if (data.categories.length > 0) {
-            setSelectedCategory(data.categories[0].id);
-          }
+          const list = data.categories as Category[];
+          setCategories(list);
+          // 两级分类时默认选中第一个类型下的第一个子分类
+          const { parent, category } = pickDefaultSelection(list);
+          setSelectedParentCategory(parent);
+          setSelectedCategory(category);
         }
       } catch (error) {
         console.error('Failed to load categories:', error);
@@ -321,6 +338,16 @@ function SourceSearchPageClient() {
     searchVideos();
   }, [restoreChecked, selectedSource, searchKeyword, currentPage, viewMode]);
 
+  // 切换一级分类（类型）时，落到该类型下第一个子分类并重置到第一页
+  const handleParentCategoryChange = (value: string) => {
+    setSelectedParentCategory(value);
+    setCurrentPage(1);
+    setVideos([]);
+    setHasMore(true);
+    const children = getChildCategories(categories, value);
+    setSelectedCategory(children.length > 0 ? children[0].id : value);
+  };
+
   // 切换分类时，重置到第一页
   const handleCategoryChange = (value: string) => {
     setSelectedCategory(value);
@@ -352,8 +379,11 @@ function SourceSearchPageClient() {
   };
 
   // Intersection Observer for infinite scroll
+  // 哨兵节点仅在列表非空时渲染；快照恢复不发请求、isLoadingVideos 不翻转，
+  // 需要依赖列表出现才能（重新）挂载观察器
+  const hasVideos = videos.length > 0;
   useEffect(() => {
-    if (!loadMoreRef.current) return;
+    if (!hasVideos || !loadMoreRef.current) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -370,7 +400,7 @@ function SourceSearchPageClient() {
     return () => {
       observer.disconnect();
     };
-  }, [hasMore, isLoadingVideos]);
+  }, [hasVideos, hasMore, isLoadingVideos]);
 
   // 滚动超过一屏后显示置顶按钮
   useEffect(() => {
@@ -397,6 +427,16 @@ function SourceSearchPageClient() {
       scrollPageTo(0);
     }
   };
+
+  // 根据分类列表推导两级结构；平铺源回退为单行分类
+  const isHierarchical = isHierarchicalCategories(categories);
+  const parentCategories = isHierarchical
+    ? getParentCategories(categories)
+    : [];
+  const subCategories =
+    isHierarchical && selectedParentCategory
+      ? getChildCategories(categories, selectedParentCategory)
+      : [];
 
   return (
     <PageLayout activePath='/source-search'>
@@ -486,12 +526,9 @@ function SourceSearchPageClient() {
             </div>
           )}
 
-          {/* 分类选择 CapsuleSwitch */}
+          {/* 分类选择：两级源为「类型 → 分类」联动，平铺源仅显示分类 */}
           {selectedSource && viewMode === 'browse' && (
-            <div className='relative'>
-              <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3'>
-                选择分类
-              </label>
+            <div className='relative space-y-6'>
               {isLoadingCategories && categories.length === 0 ? (
                 <div className='flex items-center justify-center h-12 bg-gray-50/80 rounded-lg border border-gray-200/50 dark:bg-gray-800 dark:border-gray-700'>
                   <Loader2 className='h-5 w-5 animate-spin text-gray-400' />
@@ -505,16 +542,56 @@ function SourceSearchPageClient() {
                     暂无分类
                   </span>
                 </div>
+              ) : isHierarchical ? (
+                <>
+                  <div>
+                    <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3'>
+                      选择类型
+                    </label>
+                    <div className='flex justify-center'>
+                      <CapsuleSwitch
+                        options={parentCategories.map((category) => ({
+                          label: category.name,
+                          value: category.id,
+                        }))}
+                        active={selectedParentCategory}
+                        onChange={handleParentCategoryChange}
+                      />
+                    </div>
+                  </div>
+                  {subCategories.length > 0 && (
+                    <div>
+                      <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3'>
+                        选择分类
+                      </label>
+                      <div className='flex justify-center'>
+                        <CapsuleSwitch
+                          options={subCategories.map((category) => ({
+                            label: category.name,
+                            value: category.id,
+                          }))}
+                          active={selectedCategory}
+                          onChange={handleCategoryChange}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </>
               ) : (
-                <div className='flex justify-center'>
-                  <CapsuleSwitch
-                    options={categories.map((category) => ({
-                      label: category.name,
-                      value: category.id,
-                    }))}
-                    active={selectedCategory}
-                    onChange={handleCategoryChange}
-                  />
+                <div>
+                  <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3'>
+                    选择分类
+                  </label>
+                  <div className='flex justify-center'>
+                    <CapsuleSwitch
+                      options={categories.map((category) => ({
+                        label: category.name,
+                        value: category.id,
+                      }))}
+                      active={selectedCategory}
+                      onChange={handleCategoryChange}
+                    />
+                  </div>
                 </div>
               )}
             </div>
