@@ -187,7 +187,7 @@ export default function MusicSongListsPage() {
 
   return (
     <div>
-      <div className="mb-8 flex items-center justify-between gap-3 border-b border-[rgba(0,0,0,0.08)] dark:border-[rgba(255,255,255,0.08)] pb-4 relative z-[160]">
+      <div className="mb-8 flex items-center justify-between gap-3 border-b border-[rgba(0,0,0,0.08)] dark:border-[rgba(255,255,255,0.08)] pb-4 relative z-10">
         <h2 className="text-2xl font-bold text-black dark:text-white tracking-tight">推荐歌单</h2>
 
         <div className="relative">
@@ -258,7 +258,7 @@ export default function MusicSongListsPage() {
             </button>
           ))}
         </div>
-        <div className="relative z-[130]">
+        <div className="relative z-10">
           <button
             type="button"
             onClick={() => setShowTagMenu(true)}
