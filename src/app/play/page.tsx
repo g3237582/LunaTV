@@ -2162,6 +2162,8 @@ function PlayPageClient() {
 
   const artPlayerRef = useRef<any>(null);
   const artRef = useRef<HTMLDivElement | null>(null);
+  // 换集重建播放器前记住网页全屏状态，新播放器 ready 后恢复
+  const restoreWebFullscreenOnReadyRef = useRef(false);
   const activeHarmonyHlsPlaybackModeRef =
     useRef<HarmonyHlsPlaybackMode | null>(null);
   const activeNetdiskHlsPlaybackModeRef =
@@ -4373,6 +4375,19 @@ function PlayPageClient() {
           console.log('播放器销毁前保存弹幕设置:', currentSettings);
         }
 
+        // 网页全屏时 Artplayer 会把 $player 挂到 document.body（FULLSCREEN_WEB_IN_BODY 默认开启），
+        // 而 destroy 只清空 $container，残留的 $player 会以 z-index:9999 盖住新播放器，
+        // 造成 WebKit（iOS/iPad）换集重建后黑屏只有声音。先退出网页全屏移回容器再销毁。
+        restoreWebFullscreenOnReadyRef.current = !!artPlayerRef.current.fullscreenWeb;
+        if (restoreWebFullscreenOnReadyRef.current) {
+          try {
+            artPlayerRef.current.fullscreenWeb = false;
+          } catch (err) {
+            console.warn('销毁前退出网页全屏失败:', err);
+            restoreWebFullscreenOnReadyRef.current = false;
+          }
+        }
+
         // 销毁 HLS 实例
         if (artPlayerRef.current.video && artPlayerRef.current.video.hls) {
           artPlayerRef.current.video.hls.destroy();
@@ -4396,6 +4411,14 @@ function PlayPageClient() {
           artRef.current.innerHTML = '';
         }
       }
+    }
+
+    // 兜底清理：移除残留到 body 的网页全屏播放器元素，避免盖住新播放器（黑屏只有声音）。
+    // 此时旧实例已销毁、新实例尚未创建，body 直接子级里的 .art-fullscreen-web 必为遗留元素。
+    if (typeof document !== 'undefined') {
+      document
+        .querySelectorAll<HTMLDivElement>('body > .art-fullscreen-web')
+        .forEach((el) => el.remove());
     }
   };
 
@@ -7061,6 +7084,13 @@ function PlayPageClient() {
           artRef.current.innerHTML = '';
         }
 
+        // 兜底：清理残留到 body 的网页全屏播放器元素，避免盖住新播放器（黑屏只有声音）
+        if (typeof document !== 'undefined') {
+          document
+            .querySelectorAll<HTMLDivElement>('body > .art-fullscreen-web')
+            .forEach((el) => el.remove());
+        }
+
         // 动态导入播放器库
         const [ArtplayerModule, HlsModule, DanmukuPlugin, AutoThumbnailPlugin] = await Promise.all([
           import('artplayer'),
@@ -8413,6 +8443,16 @@ function PlayPageClient() {
         // 监听播放器事件
         artPlayerRef.current.on('ready', async () => {
           setError(null);
+
+          // 换集重建前处于网页全屏则恢复，避免用户换集时被踢出全屏
+          if (restoreWebFullscreenOnReadyRef.current && artPlayerRef.current) {
+            restoreWebFullscreenOnReadyRef.current = false;
+            try {
+              artPlayerRef.current.fullscreenWeb = true;
+            } catch (err) {
+              console.warn('恢复网页全屏失败:', err);
+            }
+          }
 
           rescueWebkitHlsBootstrap('player-ready');
 
