@@ -202,7 +202,7 @@ class WatchRoomServer {
 
       // 离开房间
       socket.on('room:leave', () => {
-        this.handleLeaveRoom(socket);
+        this.handleLeaveRoom(socket, true);
       });
 
       // 获取房间列表
@@ -584,12 +584,12 @@ class WatchRoomServer {
             }
           }
         }
-        this.handleLeaveRoom(socket);
+        this.handleLeaveRoom(socket, false);
       });
     });
   }
 
-  handleLeaveRoom(socket) {
+  handleLeaveRoom(socket, isExplicitLeave = false) {
     const roomInfo = this.socketToRoom.get(socket.id);
     if (!roomInfo) return;
 
@@ -607,8 +607,9 @@ class WatchRoomServer {
 
       socket.to(roomId).emit('room:member-left', userId);
 
-      // 如果是房主主动离开，解散房间并踢出所有成员
-      if (isOwner) {
+      // 房主主动离开（room:leave）：立即解散房间并踢出所有成员
+      // 房主断线（disconnect/刷新/网络闪断）：保留房间等待重连，由清理定时器兜底删除
+      if (isOwner && isExplicitLeave) {
         console.log(`[WatchRoom] Owner actively left room ${roomId}, disbanding room`);
 
         // 通知所有成员房间被解散
@@ -629,7 +630,11 @@ class WatchRoomServer {
           this.roomDeletionTimers.delete(roomId);
         }
       } else {
-        // 普通成员离开，房间为空时延迟删除
+        if (isOwner) {
+          console.log(`[WatchRoom] Owner disconnected from room ${roomId}, waiting for reconnect`);
+        }
+
+        // 普通成员离开，或房主断线：房间为空时延迟删除
         if (roomMembers.size === 0) {
           console.log(`[WatchRoom] Room ${roomId} is now empty, will delete in 30 seconds if no one rejoins`);
 
