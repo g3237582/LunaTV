@@ -73,7 +73,11 @@ import { DanmakuFilterConfig, EpisodeFilterConfig, SearchResult } from '@/lib/ty
 import { base58Decode, getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
 import { useEnableAIComments } from '@/hooks/useEnableAIComments';
 import { useEnableComments } from '@/hooks/useEnableComments';
-import { usePlaySync } from '@/hooks/usePlaySync';
+import {
+  usePlaySync,
+  isRemoteRoomRateActive,
+  getRoomRemotePlaybackRate,
+} from '@/hooks/usePlaySync';
 
 import AIChatPanel from '@/components/AIChatPanel';
 import AIComments from '@/components/AIComments';
@@ -1899,6 +1903,12 @@ function PlayPageClient() {
       return false;
     }
 
+    // 观影室房员不能自行调整倍速，由房主同步控制
+    if (playSync.shouldDisableControls) {
+      artPlayerRef.current.notice.show = '观影室中倍速由房主控制';
+      return true;
+    }
+
     const currentRate = artPlayerRef.current.playbackRate || 1;
     const currentIndex = PLAYBACK_RATE_OPTIONS.reduce((nearestIndex, rate, index) => {
       return Math.abs(rate - currentRate) < Math.abs(PLAYBACK_RATE_OPTIONS[nearestIndex] - currentRate)
@@ -1936,6 +1946,12 @@ function PlayPageClient() {
   const resetPlaybackRate = () => {
     if (!artPlayerRef.current) {
       return false;
+    }
+
+    // 观影室房员不能自行调整倍速，由房主同步控制
+    if (playSync.shouldDisableControls) {
+      artPlayerRef.current.notice.show = '观影室中倍速由房主控制';
+      return true;
     }
 
     artPlayerRef.current.playbackRate = 1;
@@ -7257,7 +7273,8 @@ function PlayPageClient() {
           setting: true,
           loop: false,
           flip: true,
-          playbackRate: true,
+          // 观影室房员隐藏倍速设置，由房主同步控制
+          playbackRate: !playSync.shouldDisableControls,
           aspectRatio: false,
           fullscreen: !isIOS,  // iOS 禁用原生全屏按钮，避免触发系统播放器
           fullscreenWeb: true,  // 保留网页全屏按钮（所有平台）
@@ -7281,7 +7298,8 @@ function PlayPageClient() {
           theme: '#22c55e',
           lang: 'zh-cn',
           hotkey: false,
-          fastForward: true,
+          // 观影室房员禁用长按加速（会临时改变倍速）
+          fastForward: !playSync.shouldDisableControls,
           autoOrientation: true,
           lock: true,
           ...(videoQualities.length > 0 ? {
@@ -8774,6 +8792,13 @@ function PlayPageClient() {
         });
         artPlayerRef.current.on('video:ratechange', () => {
           const currentRate = artPlayerRef.current.playbackRate;
+
+          // 观影室同步来的倍速不写入个人偏好，退出房间后仍使用自己的倍速
+          if (isRemoteRoomRateActive()) {
+            syncPlaybackPitch();
+            return;
+          }
+
           const shouldIgnoreSafariReset =
             isWebkit &&
             Date.now() < playbackRateRestoreWindowUntilRef.current &&
@@ -9343,13 +9368,15 @@ function PlayPageClient() {
                 return;
               }
 
+              // 观影室房员恢复到房主同步的倍速，其他人恢复到记忆倍速
+              const targetRate =
+                getRoomRemotePlaybackRate() ?? lastPlaybackRateRef.current;
               if (
-                Math.abs(
-                  artPlayerRef.current.playbackRate - lastPlaybackRateRef.current
-                ) > 0.01 &&
+                Math.abs(artPlayerRef.current.playbackRate - targetRate) >
+                  0.01 &&
                 isWebkit
               ) {
-                artPlayerRef.current.playbackRate = lastPlaybackRateRef.current;
+                artPlayerRef.current.playbackRate = targetRate;
               }
             };
 

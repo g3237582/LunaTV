@@ -503,6 +503,7 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 | WATCH_ROOM_SERVER_TYPE                   | 观影室服务器类型                                             | internal/external           | internal                                                     |
 | WATCH_ROOM_EXTERNAL_SERVER_URL           | 外部观影室服务器地址（当 SERVER_TYPE 为 external 时必填）    | WebSocket URL               | (空)                                                         |
 | WATCH_ROOM_EXTERNAL_SERVER_AUTH          | 外部观影室服务器认证令牌（当 SERVER_TYPE 为 external 时必填） | 任意字符串                  | (空)                                                         |
+| WATCH_ROOM_EXTERNAL_APP_ID               | 外部观影室应用隔离 ID（多个应用共用同一外部服务器时隔离房间，建议使用随机长字符串） | 任意字符串 | (空) |
 | NEXT_PUBLIC_VOICE_CHAT_STRATEGY          | 观影室语音聊天策略                                           | webrtc-fallback/server-only | webrtc-fallback                                              |
 | NEXT_PUBLIC_ENABLE_OFFLINE_DOWNLOAD      | 是否启用服务器离线下载功能（开启后也仅管理员和站长可用）     | true/false                  | false                                                        |
 | OFFLINE_DOWNLOAD_DIR                     | 离线下载文件存储目录                                         | 任意有效路径                | /data                                                        |
@@ -590,7 +591,13 @@ NEXT_PUBLIC_VOICE_CHAT_STRATEGY 选项解释：
    WATCH_ROOM_EXTERNAL_SERVER_AUTH=your_secure_token
    ```
 
-3. 重启应用即可使用外部观影室服务器
+3. （可选）如果多个应用共用同一个外部观影室服务器，为每个应用设置不同的隔离 ID（随机长字符串），使各应用的房间相互隔离：
+
+   ```env
+   WATCH_ROOM_EXTERNAL_APP_ID=your_random_app_id
+   ```
+
+4. 重启应用即可使用外部观影室服务器
 
 
 

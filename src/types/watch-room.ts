@@ -30,6 +30,7 @@ export interface PlayState {
   url: string;
   currentTime: number;
   isPlaying: boolean;
+  playbackRate?: number; // 播放倍速，观影室同步类型下由房主同步
   videoId: string;
   videoName: string;
   videoYear?: string;
@@ -193,6 +194,7 @@ export interface WatchRoomConfig {
   serverType: 'internal' | 'external';
   externalServerUrl?: string;
   externalServerAuth?: string; // 通过 /api/watch-room-auth 接口获取（需要登录）
+  externalAppId?: string; // 外部服务器多应用隔离 ID，通过 /api/watch-room-auth 接口获取（需要登录）
 }
 
 // LocalStorage 存储的房间信息

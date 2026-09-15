@@ -8,6 +8,41 @@ import { useWatchRoomContextSafe } from '@/components/WatchRoomProvider';
 
 import type { PlayState } from '@/types/watch-room';
 
+// 模块级缓存：房员最近收到的房主倍速，用于换集/重进播放页后恢复
+let lastRemotePlaybackRate: number | null = null;
+// 标记正在应用观影室同步的倍速，播放页据此跳过个人偏好倍速的记忆
+let remoteRateApplyUntil = 0;
+// 当前是否在观影室内（离开房间后不再使用缓存的房主倍速）
+let isInRoomNow = false;
+
+// 播放页调用：判断当前倍速变化是否来自观影室同步
+export function isRemoteRoomRateActive() {
+  return isInRoomNow && Date.now() < remoteRateApplyUntil;
+}
+
+// 播放页调用：获取房主当前倍速（不在房间内或未收到过同步时为 null）
+export function getRoomRemotePlaybackRate() {
+  return isInRoomNow ? lastRemotePlaybackRate : null;
+}
+
+// 应用房主同步的倍速（仅在差异超过阈值时设置，避免触发多余的 ratechange）
+function applyRemotePlaybackRate(player: any, rate?: number | null) {
+  if (!rate || !Number.isFinite(rate) || rate <= 0) return;
+
+  lastRemotePlaybackRate = rate;
+
+  const currentRate = player.playbackRate || 1;
+  if (Math.abs(currentRate - rate) > 0.01) {
+    remoteRateApplyUntil = Date.now() + 1000;
+    player.playbackRate = rate;
+    try {
+      player.notice.show = `倍速：${rate}x`;
+    } catch {
+      // notice 不可用时忽略
+    }
+  }
+}
+
 interface UsePlaySyncOptions {
   artPlayerRef: React.MutableRefObject<any>;
   videoId: string;
@@ -42,6 +77,14 @@ export function usePlaySync({
   const currentRoom = watchRoom?.currentRoom;
   const socket = watchRoom?.socket;
 
+  // 同步模块级的房间状态标记（供播放页的导出函数判断）
+  useEffect(() => {
+    isInRoomNow = isInRoom;
+    if (!isInRoom) {
+      lastRemotePlaybackRate = null;
+    }
+  }, [isInRoom]);
+
   // 广播播放状态给房间内所有人（任何成员都可以触发同步）
   const broadcastPlayState = useCallback(() => {
     if (!socket || !watchRoom || !isInRoom) return;
@@ -54,6 +97,7 @@ export function usePlaySync({
       url: videoUrl,
       currentTime: player.currentTime || 0,
       isPlaying: player.playing || false,
+      playbackRate: player.playbackRate || 1,
       videoId,
       videoName,
       videoYear,
@@ -97,6 +141,9 @@ export function usePlaySync({
 
       // 标记正在处理远程命令
       isHandlingRemoteCommandRef.current = true;
+
+      // 同步房主的播放倍速
+      applyRemotePlaybackRate(player, state.playbackRate);
 
       // play:update 只同步进度，不改变播放/暂停状态
       // 播放/暂停状态由 play:play 和 play:pause 命令控制
@@ -234,6 +281,11 @@ export function usePlaySync({
         return;
       }
 
+      // 记住房主当前倍速，重进播放页后恢复
+      if (state.playbackRate && Number.isFinite(state.playbackRate) && state.playbackRate > 0) {
+        lastRemotePlaybackRate = state.playbackRate;
+      }
+
       // 跟随切换视频
       // 构建完整的 URL 参数
       const params = new URLSearchParams({
@@ -346,9 +398,26 @@ export function usePlaySync({
       watchRoom.seekPlayback(player.currentTime);
     };
 
+    const handleRateChange = () => {
+      // 如果正在处理远程命令，不要广播（避免循环）
+      if (isHandlingRemoteCommandRef.current) return;
+
+      // 房主倍速变化立即广播，暂停状态下也能同步
+      if (isOwner) {
+        console.log('[PlaySync] Rate change detected, broadcasting state');
+        broadcastPlayState();
+      }
+    };
+
     player.on('play', handlePlay);
     player.on('pause', handlePause);
     player.on('seeked', handleSeeked);
+    player.on('video:ratechange', handleRateChange);
+
+    // 房员：播放器就绪后恢复房主当前倍速（换集/进房后）
+    if (!isOwner && lastRemotePlaybackRate) {
+      applyRemotePlaybackRate(player, lastRemotePlaybackRate);
+    }
 
     // 定期同步播放进度（每5秒）
     const syncInterval = setInterval(() => {
@@ -365,9 +434,10 @@ export function usePlaySync({
       player.off('play', handlePlay);
       player.off('pause', handlePause);
       player.off('seeked', handleSeeked);
+      player.off('video:ratechange', handleRateChange);
       clearInterval(syncInterval);
     };
-  }, [socket, currentRoom, artPlayerRef, watchRoom, broadcastPlayState, isInRoom, playerReady]);
+  }, [socket, currentRoom, artPlayerRef, watchRoom, broadcastPlayState, isInRoom, isOwner, playerReady]);
 
   // 使用ref跟踪上一次的值，用于检测真正的变化
   const lastBroadcastRef = useRef<{
@@ -414,6 +484,7 @@ export function usePlaySync({
         url: videoUrl,
         currentTime: artPlayerRef.current?.currentTime || 0,
         isPlaying: artPlayerRef.current?.playing || false,
+        playbackRate: artPlayerRef.current?.playbackRate || 1,
         videoId,
         videoName,
         videoYear,
@@ -461,6 +532,7 @@ export function usePlaySync({
       url: videoUrl,
       currentTime: artPlayerRef.current?.currentTime || 0,
       isPlaying: artPlayerRef.current?.playing || false,
+      playbackRate: artPlayerRef.current?.playbackRate || 1,
       videoId,
       videoName,
       videoYear,
