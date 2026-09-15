@@ -82,6 +82,9 @@ interface EmbyView {
 
 const DEFAULT_EMBY_AUTHORIZATION_HEADER = 'MediaBrowser Client="moontvplus", Device="Web", DeviceId="moontvplus-web", Version="1.0.0"';
 
+// 文本字幕优先于位图字幕（PGS 等），自动加载的默认字幕优先取文本格式
+const TEXT_SUBTITLE_FORMATS = new Set(['ass', 'ssa', 'srt', 'vtt']);
+
 export class EmbyClient {
   private serverUrl: string;
   private apiKey?: string;
@@ -700,6 +703,14 @@ export class EmbyClient {
           renderMode,
         });
       });
+
+    // ass/ssa/srt/vtt 等文本字幕排在前，PGS 等位图字幕排在后；
+    // 播放端默认取第一条字幕，排序后自动加载文本字幕而非 PGS
+    subtitles.sort(
+      (a, b) =>
+        Number(!TEXT_SUBTITLE_FORMATS.has(a.sourceFormat)) -
+        Number(!TEXT_SUBTITLE_FORMATS.has(b.sourceFormat))
+    );
 
     return subtitles;
   }
