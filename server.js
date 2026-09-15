@@ -291,6 +291,16 @@ class WatchRoomServer {
         }
       });
 
+      // 房主离开播放页面（SPA 导航，连接仍保持）：通知房员暂停并提示，
+      // 房主回到播放页后周期广播会自动恢复同步（不清除 currentState，房员重进播放页仍可跳转回房主视频）
+      socket.on('play:owner-leave', () => {
+        const roomInfo = this.socketToRoom.get(socket.id);
+        if (!roomInfo || !roomInfo.isOwner) return;
+
+        console.log(`[WatchRoom] Owner left play page, notifying room ${roomInfo.roomId}`);
+        socket.to(roomInfo.roomId).emit('play:owner-left');
+      });
+
       // 切换直播频道
       socket.on('live:change', (state) => {
         const roomInfo = this.socketToRoom.get(socket.id);

@@ -215,7 +215,7 @@ interface EpisodeSelectorProps {
   onDanmakuSelect?: (selection: DanmakuSelection) => void;
   currentDanmakuSelection?: DanmakuSelection | null;
   onUploadDanmaku?: (comments: DanmakuComment[]) => void;
-  /** 观影室房员状态 - 禁用选集和换源，但保留弹幕 */
+  /** 观影室房员状态 - 禁用选集和换源（弹幕选项卡保留，房员可手动搜索弹幕） */
   isRoomMember?: boolean;
   /** 外层使用 TMDB 背景图时，提升深色文字对比度 */
   useLightTextOnBackdrop?: boolean;
@@ -485,17 +485,8 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
   }, [currentSource, currentId, episodeProgressContentKey, totalEpisodes, value]);
 
   // 主要的 tab 状态：'danmaku' | 'episodes' | 'sources'
-  // 默认显示选集选项卡，但如果是房员则显示弹幕
-  const [activeTab, setActiveTab] = useState<'danmaku' | 'episodes' | 'sources'>(
-    isRoomMember ? 'danmaku' : 'episodes'
-  );
-
-  // 当房员状态变化时，自动切换到弹幕选项卡
-  useEffect(() => {
-    if (isRoomMember && (activeTab === 'episodes' || activeTab === 'sources')) {
-      setActiveTab('danmaku');
-    }
-  }, [isRoomMember, activeTab]);
+  // 默认显示选集选项卡；房员默认跟随房主同步的弹幕，也可在弹幕选项卡手动搜索
+  const [activeTab, setActiveTab] = useState<'danmaku' | 'episodes' | 'sources'>('episodes');
 
   // 当前分组索引（0 开始）
   const initialPage = Math.max(
@@ -957,7 +948,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
           {isRoomMember && <span className="ml-1 text-xs">🔒</span>}
         </div>
 
-        {/* 弹幕选项卡 */}
+        {/* 弹幕选项卡 - 房员默认跟随房主同步的弹幕，也可在此手动搜索 */}
         <div
           onClick={() => setActiveTab('danmaku')}
           className={`flex-1 py-3 px-6 text-center cursor-pointer transition-all duration-200 font-medium

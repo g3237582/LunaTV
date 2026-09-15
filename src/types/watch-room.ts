@@ -37,6 +37,14 @@ export interface PlayState {
   searchTitle?: string;
   episode?: number;
   source: string;
+  danmaku?: {
+    // 房主已加载的弹幕选择，随状态同步给房员（含后加入的房员）。
+    // animeId/episodeId 由房主的弹幕服务器生成，房员侧不可靠，房员按 animeTitle/episodeTitle 重新搜索解析
+    animeId: number;
+    episodeId: number;
+    animeTitle?: string;
+    episodeTitle?: string;
+  };
 }
 
 export interface LiveState {
@@ -107,6 +115,7 @@ export interface ServerToClientEvents {
   'play:play': () => void;
   'play:pause': () => void;
   'play:change': (state: PlayState) => void;
+  'play:owner-left': () => void;
   'live:change': (state: LiveState) => void;
   'screen:start': (state: ScreenState) => void;
   'screen:stop': () => void;
@@ -157,6 +166,7 @@ export interface ClientToServerEvents {
   'play:play': () => void;
   'play:pause': () => void;
   'play:change': (state: PlayState) => void;
+  'play:owner-leave': () => void;
 
   'live:change': (state: LiveState) => void;
   'screen:helper-register': (data: {
