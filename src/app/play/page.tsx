@@ -77,7 +77,6 @@ import { useWatchRoomContextSafe } from '@/components/WatchRoomProvider';
 import {
   getRoomRemotePlaybackRate,
   isRemoteRoomRateActive,
-  isRoomMemberNow,
   usePlaySync,
 } from '@/hooks/usePlaySync';
 
@@ -615,11 +614,6 @@ function PlayPageClient() {
   const episodeFilterConfigRef = useRef<EpisodeFilterConfig | null>(null);
   const [currentDanmakuSelection, setCurrentDanmakuSelection] =
     useState<DanmakuSelection | null>(null);
-  // 弹幕选择的 ref（供 usePlaySync 广播时读取，避免闭包过期）
-  const currentDanmakuSelectionRef = useRef<DanmakuSelection | null>(null);
-  useEffect(() => {
-    currentDanmakuSelectionRef.current = currentDanmakuSelection;
-  }, [currentDanmakuSelection]);
   const [danmakuEpisodesList, setDanmakuEpisodesList] = useState<
     Array<{ episodeId: number; episodeTitle: string }>
   >([]);
@@ -974,13 +968,6 @@ function PlayPageClient() {
     videoYear,
   ]);
 
-  // 观影室房员已同步弹幕的去重标记（换集后重置，回到旧集数时能重新跟随房主弹幕）
-  const lastSyncedRoomDanmakuKeyRef = useRef<string | null>(null);
-  // 观影室房员解析房主弹幕失败的重试记录（同一弹幕最多重试 3 次，避免房主每次广播都重复请求）
-  const roomDanmakuFailRef = useRef<{ key: string; count: number } | null>(null);
-  // 观影室房员本集已手动选择/上传弹幕的标记（本集不再跟随房主弹幕，换集或退出房间后恢复跟随）
-  const roomDanmakuManualRef = useRef(false);
-
   // 当集数改变时，重置下集预缓存标记
   useEffect(() => {
     nextEpisodePreCacheTriggeredRef.current = false;
@@ -994,13 +981,6 @@ function PlayPageClient() {
       }
       nextEpisodePreCacheHlsRef.current = null;
     }
-    // 弹幕选择跟随集数：换集后旧集的弹幕选择不再有效，
-    // 房主广播状态时才不会把上一集的弹幕当成当前集的同步给房员
-    setCurrentDanmakuSelection(null);
-    // 重置观影室弹幕同步去重标记，换集后重新跟随房主弹幕
-    lastSyncedRoomDanmakuKeyRef.current = null;
-    roomDanmakuFailRef.current = null;
-    roomDanmakuManualRef.current = false;
   }, [currentEpisodeIndex]);
 
   // 监听剧集切换，自动加载对应的弹幕
@@ -1015,11 +995,6 @@ function PlayPageClient() {
   // 返回 'done' 表示该集已处理（含已弹出选择弹窗）；'retry' 表示因弹幕插件未就绪等原因放弃，待插件就绪后可重新触发
   const loadDanmakuForEpisode = async (episodeIndex: number, retryCount = 0): Promise<'done' | 'retry'> => {
     if (isDirectPlay) return 'done';
-
-    // 观影室房员：关闭自动匹配，弹幕由房主同步（房主未加载弹幕时保持无弹幕）
-    if (isRoomMemberNow()) {
-      return 'done';
-    }
 
     // 检查是否禁用了自动加载弹幕
     if (isDanmakuAutoLoadDisabled()) {
@@ -1349,12 +1324,6 @@ function PlayPageClient() {
             }
 
             // 没有记忆或记忆失效，让用户选择
-            // 观影室房员：进房前搜索已在进行时不弹选择弹窗，弹幕由房主同步
-            if (isRoomMemberNow()) {
-              console.log('[弹幕] 观影室房员跳过弹幕源选择，等待房主同步');
-              setDanmakuLoading(false);
-              return 'done';
-            }
             console.log(`等待用户选择弹幕源`);
             setDanmakuMatches(filteredAnimes);
             setCurrentSearchKeyword(searchKeyword); // 保存当前搜索关键词
@@ -2249,7 +2218,6 @@ function PlayPageClient() {
     currentSource: currentSource || '',
     videoUrl: videoUrl || '',
     playerReady: playerReady,  // 传递播放器就绪状态
-    danmakuSelectionRef: currentDanmakuSelectionRef, // 房主已加载的弹幕随状态同步给房员
   });
 
   // 观影室：一键创建房间（未加入房间时显示入口）
@@ -2294,143 +2262,6 @@ function PlayPageClient() {
       setIsCreatingRoom(false);
     }
   };
-
-  // 观影室房员：跟随房主同步的弹幕（房主加载弹幕后，房员加载同一条；后加入的房员经房间状态也能拿到）。
-  // 弹幕 id 由弹幕服务器生成，房主的 id 在房员侧不一定有效（房主可能命中本地缓存而房员请求会失败），
-  // 因此房员按视频标题重新搜索，再用房主同步的弹幕标题匹配同一部/同一集，用自己解析出的 id 加载
-  const loadRoomSyncedDanmakuRef = useRef<
-    ((
-      danmaku: {
-        animeId: number;
-        episodeId: number;
-        animeTitle?: string;
-        episodeTitle?: string;
-      }
-    ) => Promise<boolean>) | null
-  >(null);
-  useEffect(() => {
-    // loadDanmaku 等均为非 memoized 函数，用 ref 持有最新实现，避免下方 effect 依赖它们而每次渲染都执行
-    loadRoomSyncedDanmakuRef.current = async (danmaku) => {
-      if (!danmaku.animeTitle || !danmaku.episodeTitle) {
-        console.warn('[观影室] 房主弹幕信息不完整，跳过同步');
-        return false;
-      }
-
-      setDanmakuLoading(true);
-      try {
-        // 弹幕服务器按来源分别建条目，房主同步的 animeTitle 是带平台后缀的完整标题
-        // （如 “花开锦绣(2026)【电视剧】from tencent”），直接作为关键词会搜不到。
-        // 先按当前视频标题（干净标题）搜索，再用房主的 animeTitle 从结果里匹配同一来源条目
-        const searchKeyword = videoTitleRef.current;
-        if (!searchKeyword) {
-          console.warn('[观影室] 视频标题为空，无法搜索房主弹幕');
-          return false;
-        }
-        const searchResult = await searchAnime(searchKeyword);
-        if (!searchResult.success || searchResult.animes.length === 0) {
-          console.warn(`[观影室] 按视频标题搜索弹幕失败: ${searchKeyword}`);
-          return false;
-        }
-
-        // 再按房主同步的具体弹幕标题精确匹配房主选择的那一部（同一部剧有多个来源条目）
-        const anime = searchResult.animes.find((item) => item.animeTitle === danmaku.animeTitle);
-        if (!anime) {
-          console.warn(`[观影室] 搜索结果中没有与房主相同的弹幕标题: ${danmaku.animeTitle}`);
-          return false;
-        }
-
-        const episodesResult = await getEpisodes(anime.animeId);
-        if (!episodesResult.success || episodesResult.bangumi.episodes.length === 0) {
-          console.warn(`[观影室] 获取弹幕剧集列表失败: ${danmaku.animeTitle}`);
-          return false;
-        }
-
-        // 先按房主的集数标题匹配同一集，匹配不到再按集数/索引降级
-        const episode =
-          episodesResult.bangumi.episodes.find((item) => item.episodeTitle === danmaku.episodeTitle) ||
-          matchDanmakuEpisode(
-            currentEpisodeIndexRef.current,
-            episodesResult.bangumi.episodes,
-            detailRef.current?.episodes_titles?.[currentEpisodeIndexRef.current]
-          );
-        if (!episode) {
-          console.warn(`[观影室] 房主弹幕集数未匹配到: ${danmaku.episodeTitle}`);
-          return false;
-        }
-
-        // 设置剧集列表（与其他弹幕加载路径保持一致）
-        setDanmakuEpisodesList(episodesResult.bangumi.episodes);
-
-        console.log(`[观影室] 房员解析房主弹幕: ${anime.animeTitle} - ${episode.episodeTitle} (episodeId=${episode.episodeId})`);
-        await loadDanmaku(episode.episodeId, {
-          animeId: anime.animeId,
-          animeTitle: anime.animeTitle,
-          episodeTitle: episode.episodeTitle,
-          // 房员本地缓存可能是自己此前选择的弹幕源，跳过缓存确保加载房主选择的这一条
-          bypassCache: true,
-        });
-        return true;
-      } finally {
-        setDanmakuLoading(false);
-      }
-    };
-  });
-
-  useEffect(() => {
-    // 仅房员跟随；房主本地管理弹幕
-    if (!playSync.isInRoom || playSync.isOwner) {
-      // 不在房间（或已是房主）时清除手动标记，重新加入后恢复跟随房主弹幕
-      roomDanmakuManualRef.current = false;
-      return;
-    }
-
-    const state = watchRoomContext?.currentRoom?.currentState;
-    if (!state || state.type !== 'play') return;
-    const synced = state.danmaku;
-    // 弹幕 id 由弹幕服务器生成（房员侧不可靠），标题才是房员解析的关键字段
-    if (!synced?.animeTitle || !synced?.episodeTitle) return;
-
-    // 房员本集已手动选择/上传弹幕时不跟随房主（换集或退出房间后恢复跟随）
-    if (roomDanmakuManualRef.current) return;
-
-    // 集数未对齐（换集跳转进行中）时等待，避免把弹幕加载到错误的集数上
-    if ((state.episode || 1) !== currentEpisodeIndex + 1) return;
-
-    // 播放器重建或弹幕插件未就绪时等待（playerReady 变化后会重新触发）
-    if (!playerReady || !danmakuPluginRef.current) return;
-
-    // 去重：房主状态周期性广播（对象引用每次都变），同一条弹幕只加载一次
-    const syncKey = `${synced.animeTitle}:${synced.episodeTitle}`;
-    if (lastSyncedRoomDanmakuKeyRef.current === syncKey) return;
-    // 本地已加载同一条弹幕（标题相同即同一条，本地解析出的 id 与房主的不同）时视为已同步
-    const local = currentDanmakuSelectionRef.current;
-    if (local && local.animeTitle === synced.animeTitle && local.episodeTitle === synced.episodeTitle) {
-      lastSyncedRoomDanmakuKeyRef.current = syncKey;
-      roomDanmakuFailRef.current = null;
-      return;
-    }
-    // 同一条弹幕解析失败超过 3 次后不再重试，等房主换弹幕或换集
-    const fail = roomDanmakuFailRef.current;
-    if (fail && fail.key === syncKey && fail.count >= 3) return;
-
-    lastSyncedRoomDanmakuKeyRef.current = syncKey;
-    console.log(`[观影室] 跟随房主弹幕: ${synced.animeTitle} - ${synced.episodeTitle}`);
-    loadRoomSyncedDanmakuRef.current?.(synced)?.then((resolved) => {
-      if (resolved) {
-        roomDanmakuFailRef.current = null;
-        return;
-      }
-      // 解析失败：清除去重标记，房主下次广播时重试
-      const prev = roomDanmakuFailRef.current;
-      roomDanmakuFailRef.current = {
-        key: syncKey,
-        count: (prev?.key === syncKey ? prev.count : 0) + 1,
-      };
-      if (lastSyncedRoomDanmakuKeyRef.current === syncKey) {
-        lastSyncedRoomDanmakuKeyRef.current = null;
-      }
-    });
-  }, [playSync.isInRoom, playSync.isOwner, watchRoomContext?.currentRoom?.currentState, currentEpisodeIndex, playerReady]);
 
   // -----------------------------------------------------------------------------
   // 工具函数（Utils）
@@ -6464,8 +6295,6 @@ function PlayPageClient() {
     try {
       if (isDirectPlay) return;
       if (isDanmakuAutoLoadDisabled()) return;
-      // 观影室房员：下一集弹幕由房主同步，不按本地记忆预加载
-      if (isRoomMemberNow()) return;
 
       const title = videoTitleRef.current;
       if (!title) {
@@ -6584,11 +6413,6 @@ function PlayPageClient() {
   const handleUploadDanmaku = async (comments: DanmakuComment[]) => {
     setDanmakuLoading(true);
 
-    // 观影室房员手动上传弹幕后，本集不再跟随房主同步的弹幕（换集或退出房间后恢复跟随）
-    if (isRoomMemberNow()) {
-      roomDanmakuManualRef.current = true;
-    }
-
     try {
       // 缓存到IndexedDB
       const title = videoTitleRef.current;
@@ -6686,11 +6510,6 @@ function PlayPageClient() {
   const handleDanmakuSelect = async (selection: DanmakuSelection, isManual = false) => {
     console.log(`[弹幕选择] isManual=${isManual}, selection:`, selection);
     setCurrentDanmakuSelection(selection);
-
-    // 观影室房员手动选择弹幕后，本集不再跟随房主同步的弹幕（换集或退出房间后恢复跟随）
-    if (isManual && isRoomMemberNow()) {
-      roomDanmakuManualRef.current = true;
-    }
 
     // 只有手动选择时才保存到 sessionStorage
     if (isManual) {

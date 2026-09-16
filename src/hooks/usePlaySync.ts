@@ -4,7 +4,6 @@
 import { useRouter } from 'next/navigation';
 import { useCallback,useEffect, useRef } from 'react';
 
-import type { DanmakuSelection } from '@/lib/danmaku/types';
 import { watchRoomSocketManager } from '@/lib/watch-room-socket';
 
 import { useWatchRoomContextSafe } from '@/components/WatchRoomProvider';
@@ -17,17 +16,10 @@ let lastRemotePlaybackRate: number | null = null;
 let remoteRateApplyUntil = 0;
 // 当前是否在观影室内（离开房间后不再使用缓存的房主倍速）
 let isInRoomNow = false;
-// 当前是否为房主（与 isInRoomNow 配合，供播放页非 hook 调用点判断房员身份）
-let isOwnerNow = false;
 
 // 播放页调用：判断当前倍速变化是否来自观影室同步
 export function isRemoteRoomRateActive() {
   return isInRoomNow && Date.now() < remoteRateApplyUntil;
-}
-
-// 播放页调用：当前是否为观影室房员（房员关闭弹幕自动匹配，弹幕由房主同步）
-export function isRoomMemberNow() {
-  return isInRoomNow && !isOwnerNow;
 }
 
 // 播放页调用：获取房主当前倍速（不在房间内或未收到过同步时为 null）
@@ -63,7 +55,6 @@ interface UsePlaySyncOptions {
   currentSource: string;
   videoUrl: string;
   playerReady: boolean;  // 播放器是否就绪
-  danmakuSelectionRef?: React.MutableRefObject<DanmakuSelection | null>; // 房主当前弹幕选择，随状态同步给房员
 }
 
 export function usePlaySync({
@@ -76,7 +67,6 @@ export function usePlaySync({
   currentSource,
   videoUrl,
   playerReady,
-  danmakuSelectionRef,
 }: UsePlaySyncOptions) {
   const router = useRouter();
   const watchRoom = useWatchRoomContextSafe();
@@ -94,7 +84,6 @@ export function usePlaySync({
   // 同步模块级的房间状态标记（供播放页的导出函数判断）
   useEffect(() => {
     isInRoomNow = isInRoom;
-    isOwnerNow = isOwner;
     isOwnerRef.current = isOwner;
     if (!isInRoom) {
       lastRemotePlaybackRate = null;
@@ -113,18 +102,6 @@ export function usePlaySync({
       sock.emit('play:owner-leave');
     };
   }, []);
-
-  // 从 ref 提取房主当前弹幕选择（未加载弹幕时为 undefined，房员不加载弹幕）
-  const buildDanmakuField = useCallback(() => {
-    const selection = danmakuSelectionRef?.current;
-    if (!selection) return undefined;
-    return {
-      animeId: selection.animeId,
-      episodeId: selection.episodeId,
-      animeTitle: selection.animeTitle,
-      episodeTitle: selection.episodeTitle,
-    };
-  }, [danmakuSelectionRef]);
 
   // 广播播放状态给房间内所有人（任何成员都可以触发同步）
   const broadcastPlayState = useCallback(() => {
@@ -145,7 +122,6 @@ export function usePlaySync({
       searchTitle,
       episode: currentEpisode,
       source: currentSource,
-      danmaku: buildDanmakuField(),
     };
 
     // 使用防抖，避免频繁发送
@@ -154,7 +130,7 @@ export function usePlaySync({
     lastSyncTimeRef.current = now;
 
     watchRoom.updatePlayState(state);
-  }, [socket, videoUrl, videoId, videoName, videoYear, searchTitle, currentEpisode, currentSource, watchRoom, artPlayerRef, isInRoom, buildDanmakuField]);
+  }, [socket, videoUrl, videoId, videoName, videoYear, searchTitle, currentEpisode, currentSource, watchRoom, artPlayerRef, isInRoom]);
 
   // 接收并同步其他成员的播放状态
   useEffect(() => {
@@ -627,7 +603,6 @@ export function usePlaySync({
         searchTitle,
         episode: currentEpisode,
         source: currentSource,
-        danmaku: buildDanmakuField(),
       };
 
       console.log('[PlaySync] Broadcasting play:change:', state);
@@ -638,7 +613,7 @@ export function usePlaySync({
     }, 500); // 减少延迟到500ms
 
     return () => clearTimeout(timer);
-  }, [isOwner, socket, currentRoom, isInRoom, watchRoom, videoId, currentEpisode, currentSource, videoUrl, videoName, videoYear, searchTitle, artPlayerRef, buildDanmakuField]);
+  }, [isOwner, socket, currentRoom, isInRoom, watchRoom, videoId, currentEpisode, currentSource, videoUrl, videoName, videoYear, searchTitle, artPlayerRef]);
 
   // 房主：加入房间时立即广播当前播放状态
   const lastRoomStateRef = useRef<{ isOwner: boolean; roomId: string | null }>({ isOwner: false, roomId: null });
@@ -676,7 +651,6 @@ export function usePlaySync({
       searchTitle,
       episode: currentEpisode,
       source: currentSource,
-      danmaku: buildDanmakuField(),
     };
 
     // 短暂延迟确保房间连接已稳定
@@ -693,7 +667,7 @@ export function usePlaySync({
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [isOwner, currentRoom, socket, isInRoom, watchRoom, videoId, videoUrl, videoName, videoYear, searchTitle, currentEpisode, currentSource, artPlayerRef, buildDanmakuField]);
+  }, [isOwner, currentRoom, socket, isInRoom, watchRoom, videoId, videoUrl, videoName, videoYear, searchTitle, currentEpisode, currentSource, artPlayerRef]);
 
   return {
     isInRoom,

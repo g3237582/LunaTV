@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect,useRef,useState } from 'react';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { getStoredRoomInfo } from '@/hooks/useWatchRoom';
 
 import PageLayout from '@/components/PageLayout';
 import Toast, { ToastProps } from '@/components/Toast';
@@ -217,11 +218,18 @@ function WatchRoomPageContent() {
     }
   };
 
-  // 通过邀请链接进入时自动加入房间（已加入/已是房主则跳过）
+  // 通过邀请链接进入时自动加入房间（已加入则跳过）
   const autoJoinAttemptedRef = useRef(false);
   useEffect(() => {
     if (!linkRoomId || autoJoinAttemptedRef.current) return;
     if (!watchRoom.isConnected || currentRoom) return;
+
+    // 房主不接受邀请链接：直接拒绝加入
+    if (getStoredRoomInfo()?.isOwner) {
+      autoJoinAttemptedRef.current = true;
+      showToast('你是房间房主，无法通过邀请链接加入', 'error');
+      return;
+    }
 
     autoJoinAttemptedRef.current = true;
     joinRoom({

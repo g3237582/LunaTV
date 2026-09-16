@@ -151,6 +151,11 @@ class WatchRoomServer {
             console.log(`[WatchRoom] Owner ${data.userName} reconnected to room ${data.roomId}`);
           }
 
+          // 房主本人（未携带房主令牌）：直接拒绝加入自己的房间，避免以房员身份加入
+          if (!isOwner && data.userName && data.userName === room.ownerName) {
+            return callback({ success: false, error: '你是该房间房主，无法通过邀请链接加入' });
+          }
+
           // 取消房间的删除定时器（如果有人重连）
           if (this.roomDeletionTimers.has(data.roomId)) {
             console.log(`[WatchRoom] Cancelling deletion timer for room ${data.roomId}`);
