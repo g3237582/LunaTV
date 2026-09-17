@@ -1,7 +1,7 @@
 /* eslint-disable no-console,@typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from 'next/server';
 
-import { parseAuthInfo } from '@/lib/auth';
+import { expireAuthCookie, parseAuthInfo, writeAuthCookie } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 import {
@@ -209,14 +209,7 @@ export async function POST(req: NextRequest) {
       if (!envPassword) {
         const response = buildLoginResponse();
 
-        // 清除可能存在的认证cookie
-        response.cookies.set('auth', '', {
-          path: '/',
-          expires: new Date(0),
-          sameSite: 'lax',
-          httpOnly: false,
-        });
-
+        expireAuthCookie(response);
         return response;
       }
 
@@ -249,13 +242,7 @@ export async function POST(req: NextRequest) {
       const expires = new Date();
       expires.setDate(expires.getDate() + 60); // 60天过期（Refresh Token 有效期）
 
-      response.cookies.set('auth', cookieValue, {
-        path: '/',
-        expires,
-        sameSite: 'lax',
-        httpOnly: false, // 允许客户端访问
-        secure: false,
-      });
+      writeAuthCookie(response, cookieValue, expires);
 
       return response;
     }
@@ -317,13 +304,7 @@ export async function POST(req: NextRequest) {
       const expires = new Date();
       expires.setDate(expires.getDate() + 60); // 60天过期（Refresh Token 有效期）
 
-      response.cookies.set('auth', cookieValue, {
-        path: '/',
-        expires,
-        sameSite: 'lax',
-        httpOnly: false, // 允许客户端访问
-        secure: false,
-      });
+      writeAuthCookie(response, cookieValue, expires);
 
       return response;
     } else if (username === process.env.USERNAME) {
@@ -374,12 +355,7 @@ export async function POST(req: NextRequest) {
     const expires = new Date();
     expires.setDate(expires.getDate() + 60); // 60天过期（Refresh Token 有效期）
 
-  response.cookies.set('auth', cookieValue, {
-    path: '/',
-    expires,
-    sameSite: 'lax',
-    httpOnly: false, // 允许客户端访问
-  });
+    writeAuthCookie(response, cookieValue, expires);
 
     console.log(`Cookie已设置`);
 

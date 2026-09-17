@@ -9,6 +9,7 @@ import './globals.css';
 import { parseAuthInfo } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { getUserFeatureAccess } from '@/lib/permissions';
+import { getCurrentSite, getPeerSite } from '@/lib/site-context';
 import { listEnabledSourceScripts } from '@/lib/source-script';
 
 import { StartupCacheCleanup } from '../components/DanmakuCacheCleanup';
@@ -149,8 +150,14 @@ export default async function RootLayout({
     query: string;
   }[];
   if (storageType !== 'localstorage') {
+    const isolatedSite = getCurrentSite();
     const cookieStore = await cookies();
-    const authInfo = parseAuthInfo(cookieStore.get('auth')?.value);
+    const authInfo = parseAuthInfo(
+      cookieStore.get(isolatedSite.authCookieName)?.value ||
+        (getPeerSite(isolatedSite.id)
+          ? undefined
+          : cookieStore.get('auth')?.value)
+    );
     userFeatureAccess = await getUserFeatureAccess(authInfo?.username);
 
     const config = await getConfig();
@@ -348,6 +355,8 @@ export default async function RootLayout({
     NETDISK_TRANSFER_ENABLED: userFeatureAccess.netdisk_transfer,
     NETDISK_TEMP_PLAY_ENABLED: userFeatureAccess.netdisk_temp_play,
     FESTIVE_EFFECT_ENABLED: process.env.FESTIVE_EFFECT_ENABLED === 'true',
+    SITE_ID: getCurrentSite().id,
+    AUTH_COOKIE_NAME: getCurrentSite().authCookieName,
   };
 
   return (
@@ -425,6 +434,7 @@ export default async function RootLayout({
             announcement={announcement}
             announcementDisplayMode={announcementDisplayMode}
             tmdbApiKey={tmdbApiKey}
+            siteId={getCurrentSite().id}
           >
             <WatchRoomProvider>
               <DownloadProvider>

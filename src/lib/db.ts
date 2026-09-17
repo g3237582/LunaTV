@@ -9,6 +9,7 @@ import {
   MusicV2PlaylistItem,
   MusicV2PlaylistRecord,
 } from './music-v2';
+import { getCurrentSite, getCurrentSiteId } from './site-context';
 import {
   DanmakuFilterConfig,
   Favorite,
@@ -55,7 +56,8 @@ function createStorage(): IStorage {
         );
       }
       const { KvrocksStorage } = require('./kvrocks.db');
-      return new KvrocksStorage();
+      const site = getCurrentSite();
+      return new KvrocksStorage(site.kvrocksUrl || process.env.KVROCKS_URL, site.id);
     case 'd1':
       // D1Storage 只能在服务端使用，客户端会报错
       if (typeof window !== 'undefined') {
@@ -194,14 +196,17 @@ function getD1Adapter(): any {
   return new SQLiteAdapter(db);
 }
 
-// 单例存储实例
-let storageInstance: IStorage | null = null;
+// 按站点隔离的存储实例
+const storageInstances = new Map<string, IStorage>();
 
 export function getStorage(): IStorage {
-  if (!storageInstance) {
-    storageInstance = createStorage();
+  const siteId = getCurrentSiteId();
+  let instance = storageInstances.get(siteId);
+  if (!instance) {
+    instance = createStorage();
+    storageInstances.set(siteId, instance);
   }
-  return storageInstance;
+  return instance;
 }
 
 // 工具函数：生成存储key
@@ -211,11 +216,11 @@ export function generateStorageKey(source: string, id: string): string {
 
 // 导出便捷方法
 export class DbManager {
-  private storage: IStorage;
-
-  constructor() {
-    this.storage = getStorage();
+  private get storage(): IStorage {
+    return getStorage();
   }
+
+  constructor() {}
 
   // 播放记录相关方法
   async getPlayRecord(

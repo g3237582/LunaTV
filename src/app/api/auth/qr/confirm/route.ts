@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getAuthInfoFromCookie } from '@/lib/auth';
+import { getAuthInfoFromCookie, readAuthCookieValue } from '@/lib/auth';
 import { getQrLoginSession, saveQrLoginSession } from '@/lib/qr-login/store';
 
 export const runtime = 'nodejs';
@@ -12,7 +12,7 @@ export async function POST(request: NextRequest) {
   if (session.status === 'cancelled' || session.status === 'used') return NextResponse.json({ error: '二维码不可用' }, { status: 400 });
 
   const authInfo = getAuthInfoFromCookie(request);
-  const authCookie = request.cookies.get('auth')?.value;
+  const authCookie = readAuthCookieValue(request);
   if (!authInfo || !authCookie) return NextResponse.json({ error: '请先在手机端登录后再确认' }, { status: 401 });
 
   session.status = 'confirmed';

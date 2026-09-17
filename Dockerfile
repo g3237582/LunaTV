@@ -71,6 +71,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/server.js ./server.js
 # Next standalone 只会追踪 Next 应用入口，不会自动包含自定义服务器额外 require 的源文件，
 # 因此需要显式复制该运行时模块，避免生产镜像启动时报 Cannot find module。
 COPY --from=builder --chown=nextjs:nodejs /app/src/lib/tv-remote-hub.js ./src/lib/tv-remote-hub.js
+COPY --from=builder --chown=nextjs:nodejs /app/src/lib/site-runtime.js ./src/lib/site-runtime.js
 # 从构建器中复制 public 和 .next/static 目录
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
@@ -83,7 +84,7 @@ RUN mkdir -p /app/.data "$OFFLINE_DOWNLOAD_DIR" \
   && chown -R nextjs:nodejs /app/.data "$OFFLINE_DOWNLOAD_DIR"
 
 # 默认以 root 启动，由 entrypoint 按 PUID/PGID 环境变量调整后降权运行
-EXPOSE 3000
+EXPOSE 3000 3001
 
 # 使用自定义启动脚本，先预加载配置再启动服务器
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

@@ -3,7 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { invalidateDeviceAccessToken, invalidateUserAccessTokens } from '@/lib/access-token-invalidation';
-import { getAuthInfoFromCookie } from '@/lib/auth';
+import { expireAuthCookie, getAuthInfoFromCookie } from '@/lib/auth';
 import { getStorage } from '@/lib/db';
 import {
   getUserDevices,
@@ -80,14 +80,7 @@ export async function POST(request: NextRequest) {
 
     const response = NextResponse.json({ ok: true });
 
-    // 清除当前设备的 Cookie
-    response.cookies.set('auth', '', {
-      path: '/',
-      expires: new Date(0),
-      sameSite: 'lax',
-      httpOnly: false,
-      secure: false,
-    });
+    expireAuthCookie(response);
 
     return response;
   } catch (error) {

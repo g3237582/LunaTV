@@ -1,6 +1,7 @@
 /* eslint-disable no-console,@typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from 'next/server';
 
+import { writeAuthCookie } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 import {
@@ -237,13 +238,7 @@ export async function GET(request: NextRequest) {
       const cookieValue = await generateAuthCookie(username, userRole, deviceInfo);
       const expires = new Date(Date.now() + TOKEN_CONFIG.REFRESH_TOKEN_AGE);
 
-      response.cookies.set('auth', cookieValue, {
-        path: '/',
-        expires,
-        sameSite: 'lax',
-        httpOnly: false,
-        secure: false,
-      });
+      writeAuthCookie(response, cookieValue, expires);
 
       // 清除state cookie
       response.cookies.delete('oidc_state');

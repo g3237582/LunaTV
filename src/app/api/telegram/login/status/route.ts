@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { writeAuthCookie } from '@/lib/auth';
 import {
   consumeConfirmedTelegramLogin,
   getTelegramLoginSession,
@@ -17,13 +18,7 @@ export async function GET(request: NextRequest) {
     const response = NextResponse.json({ status: 'confirmed', username: consumed?.username });
     const expires = new Date();
     expires.setDate(expires.getDate() + 60);
-    response.cookies.set('auth', session.authToken, {
-      path: '/',
-      expires,
-      sameSite: 'lax',
-      httpOnly: false,
-      secure: false,
-    });
+    writeAuthCookie(response, session.authToken, expires);
     return response;
   }
 

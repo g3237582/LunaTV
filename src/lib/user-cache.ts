@@ -1,5 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { getCurrentSiteId } from './site-context';
+
+function scopedKey(key: string): string {
+  return `${getCurrentSiteId()}:${key}`;
+}
+
 // 用户信息缓存
 interface CachedUserInfo {
   role: 'owner' | 'admin' | 'user';
@@ -17,12 +23,12 @@ class UserInfoCache {
   private readonly TTL = 6 * 60 * 60 * 1000; // 6小时过期
 
   get(username: string): CachedUserInfo | null {
-    const cached = this.cache.get(username);
+    const cached = this.cache.get(scopedKey(username));
     if (!cached) return null;
 
     // 检查是否过期
     if (Date.now() - cached.cachedAt > this.TTL) {
-      this.cache.delete(username);
+      this.cache.delete(scopedKey(username));
       return null;
     }
 
@@ -30,14 +36,14 @@ class UserInfoCache {
   }
 
   set(username: string, userInfo: Omit<CachedUserInfo, 'cachedAt'>): void {
-    this.cache.set(username, {
+    this.cache.set(scopedKey(username), {
       ...userInfo,
       cachedAt: Date.now(),
     });
   }
 
   delete(username: string): void {
-    this.cache.delete(username);
+    this.cache.delete(scopedKey(username));
   }
 
   clear(): void {
@@ -62,12 +68,12 @@ class OwnerExistenceCache {
   private readonly TTL = 10 * 60 * 1000; // 10分钟过期
 
   get(ownerUsername: string): boolean | null {
-    const cached = this.cache.get(ownerUsername);
+    const cached = this.cache.get(scopedKey(ownerUsername));
     if (!cached) return null;
 
     // 检查是否过期
     if (Date.now() - cached.cachedAt > this.TTL) {
-      this.cache.delete(ownerUsername);
+      this.cache.delete(scopedKey(ownerUsername));
       return null;
     }
 
@@ -75,14 +81,14 @@ class OwnerExistenceCache {
   }
 
   set(ownerUsername: string, exists: boolean): void {
-    this.cache.set(ownerUsername, {
+    this.cache.set(scopedKey(ownerUsername), {
       exists,
       cachedAt: Date.now(),
     });
   }
 
   delete(ownerUsername: string): void {
-    this.cache.delete(ownerUsername);
+    this.cache.delete(scopedKey(ownerUsername));
   }
 
   clear(): void {

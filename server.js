@@ -11,6 +11,10 @@ const {
   removeTVRemoteSocket,
   updateTVRemoteDevice,
 } = require('./src/lib/tv-remote-hub.js');
+const {
+  parseIsolatedSites,
+  stampSiteHeader,
+} = require('./src/lib/site-runtime.js');
 
 function shouldInitSQLite() {
   const isCloudflare = process.env.CF_PAGES === '1' || process.env.BUILD_TARGET === 'cloudflare';
@@ -729,9 +733,13 @@ function parseCookieHeader(cookieHeader) {
   }, {});
 }
 
-function parseSocketAuth(socket) {
+function parseSocketAuth(socket, site) {
   const cookies = parseCookieHeader(socket.handshake.headers.cookie || '');
-  const raw = cookies.auth || socket.handshake.auth?.token || '';
+  const raw =
+    (site && cookies[site.authCookieName]) ||
+    cookies.auth ||
+    socket.handshake.auth?.token ||
+    '';
   if (!raw) return null;
 
   let decoded = raw;
@@ -753,10 +761,11 @@ function parseSocketAuth(socket) {
 }
 
 class TVRemoteServer {
-  constructor(io) {
+  constructor(io, site) {
     this.io = io;
+    this.site = site;
     this.cleanupInterval = null;
-    attachTVRemoteIO(io);
+    attachTVRemoteIO(io, site && site.id);
     this.setupEventHandlers();
     this.startCleanupTimer();
   }
@@ -764,7 +773,7 @@ class TVRemoteServer {
   setupEventHandlers() {
     this.io.on('connection', (socket) => {
       socket.on('tv-remote:register-tv', (data, callback) => {
-        const auth = parseSocketAuth(socket);
+        const auth = parseSocketAuth(socket, this.site);
         if (!auth?.username) {
           callback?.({ success: false, error: '未登录' });
           return;
@@ -780,7 +789,7 @@ class TVRemoteServer {
       });
 
       socket.on('tv-remote:tv-state', (data) => {
-        const auth = parseSocketAuth(socket);
+        const auth = parseSocketAuth(socket, this.site);
         if (!auth?.username) return;
         updateTVRemoteDevice(socket.id, auth.username, data);
       });
@@ -802,33 +811,17 @@ class TVRemoteServer {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
     }
-    clearTVRemoteHub();
+    clearTVRemoteHub(this.site && this.site.id);
   }
 }
 
-app.prepare().then(async () => {
-  const httpServer = createServer(async (req, res) => {
-    try {
-      const parsedUrl = parse(req.url, true);
-      await handle(req, res, parsedUrl);
-    } catch (err) {
-      console.error('Error occurred handling', req.url, err);
-      res.statusCode = 500;
-      res.end('Internal server error');
-    }
-  });
-
-  // 读取观影室配置
-  const watchRoomConfig = await getWatchRoomConfig();
-  console.log('[WatchRoom] Config:', watchRoomConfig);
-
-  let watchRoomServer = null;
-  let tvRemoteServer = null;
-  let io = null;
-
+function attachRealtime(httpServer, site, watchRoomConfig) {
   const tvModeEnabled = isTVModeEnabled();
   const shouldStartInternalWatchRoom =
     watchRoomConfig.enabled && watchRoomConfig.serverType === 'internal';
+  let io = null;
+  let watchRoomServer = null;
+  let tvRemoteServer = null;
 
   if (tvModeEnabled || shouldStartInternalWatchRoom) {
     io = new Server(httpServer, {
@@ -841,37 +834,64 @@ app.prepare().then(async () => {
   }
 
   if (tvModeEnabled && io) {
-    tvRemoteServer = new TVRemoteServer(io);
-    console.log('[TVRemote] Socket.IO remote server initialized');
+    tvRemoteServer = new TVRemoteServer(io, site);
+    console.log(
+      `[TVRemote] Socket.IO remote server initialized [${site.id}:${site.port}]`
+    );
   } else {
-    console.log('[TVRemote] TV mode disabled, remote server not initialized');
+    console.log(
+      `[TVRemote] TV mode disabled, remote server not initialized [${site.id}]`
+    );
   }
 
   if (shouldStartInternalWatchRoom && io) {
-    // 初始化观影室服务器
     watchRoomServer = new WatchRoomServer(io);
-    console.log('[WatchRoom] Socket.IO server initialized');
-  } else {
-    if (!watchRoomConfig.enabled) {
-      console.log('[WatchRoom] Watch room is disabled');
-    } else if (watchRoomConfig.serverType === 'external') {
-      console.log('[WatchRoom] Using external watch room server');
-    }
+    console.log(`[WatchRoom] Socket.IO server initialized [${site.id}]`);
+  } else if (!watchRoomConfig.enabled) {
+    console.log(`[WatchRoom] Watch room is disabled [${site.id}]`);
+  } else if (watchRoomConfig.serverType === 'external') {
+    console.log(`[WatchRoom] Using external watch room server [${site.id}]`);
   }
 
-  httpServer
-    .once('error', (err) => {
-      console.error(err);
-      process.exit(1);
-    })
-    .listen(port, () => {
-      console.log(`> Ready on http://${hostname}:${port}`);
-      if (io) {
-        console.log(`> Socket.IO ready on ws://${hostname}:${port}`);
-      } else {
-        console.log('> Socket.IO disabled');
+  return { io, watchRoomServer, tvRemoteServer };
+}
+
+app.prepare().then(async () => {
+  const watchRoomConfig = await getWatchRoomConfig();
+  console.log('[WatchRoom] Config:', watchRoomConfig);
+  const sites = parseIsolatedSites();
+
+  sites.forEach((site) => {
+    const httpServer = createServer(async (req, res) => {
+      try {
+        stampSiteHeader(req.headers, site.id);
+        const parsedUrl = parse(req.url, true);
+        await handle(req, res, parsedUrl);
+      } catch (err) {
+        console.error('Error occurred handling', req.url, err);
+        res.statusCode = 500;
+        res.end('Internal server error');
       }
     });
+
+    const { io } = attachRealtime(httpServer, site, watchRoomConfig);
+
+    httpServer
+      .once('error', (err) => {
+        console.error(err);
+        process.exit(1);
+      })
+      .listen(site.port, () => {
+        console.log(`> Ready on http://${hostname}:${site.port} [${site.id}]`);
+        if (io) {
+          console.log(
+            `> Socket.IO ready on ws://${hostname}:${site.port} [${site.id}]`
+          );
+        } else {
+          console.log(`> Socket.IO disabled [${site.id}]`);
+        }
+      });
+  });
 
   const forceExit = (signal) => {
     console.log(`\n[Server] Received ${signal}, force exiting...`);

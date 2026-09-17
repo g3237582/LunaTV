@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getConfig } from '@/lib/config';
+import { getCurrentSite } from '@/lib/site-context';
 import { CURRENT_VERSION } from '@/lib/version';
 
 export const runtime = 'nodejs';
@@ -30,10 +31,16 @@ export async function GET(request: NextRequest) {
         externalServerUrl: process.env.WATCH_ROOM_EXTERNAL_SERVER_URL,
       };
 
+  const isolatedSite = getCurrentSite();
+  const siteFields = {
+    siteId: isolatedSite.id,
+    authCookieName: isolatedSite.authCookieName,
+  };
+
   // 如果使用 localStorage，返回默认配置
   if (storageType === 'localstorage') {
     return NextResponse.json({
-      SiteName: process.env.NEXT_PUBLIC_SITE_NAME || 'MoonTVPlus',
+      SiteName: isolatedSite.siteName || process.env.NEXT_PUBLIC_SITE_NAME || 'MoonTVPlus',
       StorageType: 'localstorage',
       Version: CURRENT_VERSION,
       TVModeEnabled: process.env.ENABLE_TV_MODE !== 'false',
@@ -42,6 +49,7 @@ export async function GET(request: NextRequest) {
       DanmakuAutoLoadDefault: true,
       EnableTelegramLogin: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_USERNAME && process.env.TELEGRAM_LOGIN_ENABLED !== 'false'),
       TelegramBotUsername: process.env.TELEGRAM_BOT_USERNAME || '',
+      ...siteFields,
     });
   }
 
@@ -83,6 +91,7 @@ export async function GET(request: NextRequest) {
     AIEnablePlayPageEntry: config.AIConfig?.EnablePlayPageEntry || false,
     AIDefaultMessageNoVideo: config.AIConfig?.DefaultMessageNoVideo || '',
     AIDefaultMessageWithVideo: config.AIConfig?.DefaultMessageWithVideo || '',
+    ...siteFields,
   };
   return NextResponse.json(result);
 }

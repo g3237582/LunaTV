@@ -5,12 +5,15 @@ import { BaseRedisStorage } from './redis-base.db';
 import { createRedisClient, createRetryWrapper } from './redis-node-client';
 
 export class KvrocksStorage extends BaseRedisStorage {
-  constructor() {
+  constructor(url?: string, siteId?: string) {
+    const resolvedUrl = url || process.env.KVROCKS_URL!;
     const config = {
-      url: process.env.KVROCKS_URL!,
-      clientName: 'Kvrocks'
+      url: resolvedUrl,
+      clientName: siteId ? `Kvrocks:${siteId}` : 'Kvrocks',
     };
-    const globalSymbol = Symbol.for('__MOONTV_KVROCKS_CLIENT__');
+    const globalSymbol = Symbol.for(
+      `__MOONTV_KVROCKS_CLIENT__${siteId || resolvedUrl || 'default'}`
+    );
     const client = createRedisClient(config, globalSymbol);
     const adapter = new StandardRedisAdapter(client);
     const withRetry = createRetryWrapper(config.clientName, () => client);

@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 import { normalizeApiBaseUrl } from '@/lib/url';
 
 import { AdminConfig } from './admin.types';
+import { getCurrentSite, getCurrentSiteId } from './site-context';
 import { setServerTmdbImageBaseUrl } from './tmdb-image-base';
 
 const BUILTIN_DANMAKU_API_BASE = 'https://mtvpls-danmu.netlify.app/87654321';
@@ -74,9 +75,9 @@ export const API_CONFIG = {
   },
 };
 
-// 在模块加载时根据环境决定配置来源
-let cachedConfig: AdminConfig;
-let configInitPromise: Promise<AdminConfig> | null = null;
+// 按站点隔离的管理员配置缓存
+const cachedConfigs = new Map<string, AdminConfig>();
+const configInitPromises = new Map<string, Promise<AdminConfig>>();
 
 // 从配置文件补充管理员配置
 export function refineConfig(adminConfig: AdminConfig): AdminConfig {
@@ -264,7 +265,10 @@ async function getInitConfig(
     ConfigFile: configSource,
     ConfigSubscribtion: subConfig,
     SiteConfig: {
-      SiteName: process.env.NEXT_PUBLIC_SITE_NAME || 'MoonTVPlus',
+      SiteName:
+        getCurrentSite().siteName ||
+        process.env.NEXT_PUBLIC_SITE_NAME ||
+        'MoonTVPlus',
       Announcement:
         process.env.ANNOUNCEMENT ||
         '本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。',
@@ -418,27 +422,27 @@ async function getInitConfig(
 }
 
 export async function getConfig(): Promise<AdminConfig> {
-  // 直接使用内存缓存
+  const siteId = getCurrentSiteId();
+  const cachedConfig = cachedConfigs.get(siteId);
   if (cachedConfig) {
     return cachedConfig;
   }
 
-  // 如果正在初始化，等待初始化完成
-  if (configInitPromise) {
-    return configInitPromise;
+  const pending = configInitPromises.get(siteId);
+  if (pending) {
+    return pending;
   }
 
-  // 创建初始化 Promise
-  configInitPromise = (async () => {
+  const configInitPromise = (async () => {
     const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
 
     // localStorage 模式下直接从环境变量初始化
     if (storageType === 'localstorage') {
       console.log('localStorage 模式：从环境变量初始化配置');
-      const adminConfig = await getInitConfig('');
-      cachedConfig = configSelfCheck(adminConfig);
-      configInitPromise = null;
-      return cachedConfig;
+      const adminConfig = configSelfCheck(await getInitConfig(''));
+      cachedConfigs.set(siteId, adminConfig);
+      configInitPromises.delete(siteId);
+      return adminConfig;
     }
 
     // 读 db
@@ -472,7 +476,7 @@ export async function getConfig(): Promise<AdminConfig> {
       !adminConfig.EmbyConfig.Sources;
 
     adminConfig = configSelfCheck(adminConfig);
-    cachedConfig = adminConfig;
+    cachedConfigs.set(siteId, adminConfig);
 
     // 如果进行了Emby配置迁移，保存到数据库
     if (!dbReadFailed && needsEmbyMigration) {
@@ -499,7 +503,7 @@ export async function getConfig(): Promise<AdminConfig> {
           // 迁移完成后，清空配置中的用户列表并保存
           adminConfig.UserConfig.Users = [];
           await db.saveAdminConfig(adminConfig);
-          cachedConfig = adminConfig;
+          cachedConfigs.set(siteId, adminConfig);
           console.log('用户自动迁移完成');
         }
       } catch (error) {
@@ -508,11 +512,11 @@ export async function getConfig(): Promise<AdminConfig> {
       }
     }
 
-    // 清除初始化 Promise
-    configInitPromise = null;
-    return cachedConfig;
+    configInitPromises.delete(siteId);
+    return cachedConfigs.get(siteId) as AdminConfig;
   })();
 
+  configInitPromises.set(siteId, configInitPromise);
   return configInitPromise;
 }
 
@@ -1211,7 +1215,7 @@ export async function resetConfig() {
     originConfig.ConfigFile,
     originConfig.ConfigSubscribtion
   );
-  cachedConfig = adminConfig;
+  cachedConfigs.set(getCurrentSiteId(), adminConfig);
   await db.saveAdminConfig(adminConfig);
 
   return;
@@ -1298,10 +1302,11 @@ export async function getAvailableApiSites(
 }
 
 export async function setCachedConfig(config: AdminConfig) {
-  cachedConfig = config;
+  cachedConfigs.set(getCurrentSiteId(), config);
 }
 
 export async function clearConfigCache() {
-  cachedConfig = null as any;
-  configInitPromise = null;
+  const siteId = getCurrentSiteId();
+  cachedConfigs.delete(siteId);
+  configInitPromises.delete(siteId);
 }

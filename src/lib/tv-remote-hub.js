@@ -1,18 +1,41 @@
 const HUB_KEY = '__moonTvRemoteHub';
+const {
+  getDefaultSiteId,
+  readSiteIdFromHeaders,
+} = require('./site-runtime');
 
-function getGlobalHub() {
-  if (!globalThis[HUB_KEY]) {
-    globalThis[HUB_KEY] = {
+function currentSiteId(explicitId) {
+  if (explicitId) {
+    return String(explicitId);
+  }
+  try {
+    const { headers } = require('next/headers');
+    const fromHeaders = readSiteIdFromHeaders(headers());
+    if (fromHeaders) {
+      return fromHeaders;
+    }
+  } catch {
+    // Custom server / Socket.IO paths do not have Next headers.
+  }
+  return getDefaultSiteId();
+}
+
+function getGlobalHub(siteId) {
+  const id = currentSiteId(siteId);
+  const storeKey = `${HUB_KEY}:${id}`;
+  if (!globalThis[storeKey]) {
+    globalThis[storeKey] = {
       io: null,
       devices: new Map(),
       socketToDevice: new Map(),
+      siteId: id,
     };
   }
-  return globalThis[HUB_KEY];
+  return globalThis[storeKey];
 }
 
-function attachTVRemoteIO(io) {
-  const hub = getGlobalHub();
+function attachTVRemoteIO(io, siteId) {
+  const hub = getGlobalHub(siteId);
   hub.io = io;
 }
 
@@ -103,8 +126,8 @@ function cleanupTVRemoteDevices() {
   }
 }
 
-function clearTVRemoteHub() {
-  const hub = getGlobalHub();
+function clearTVRemoteHub(siteId) {
+  const hub = getGlobalHub(siteId);
   hub.io = null;
   hub.devices.clear();
   hub.socketToDevice.clear();

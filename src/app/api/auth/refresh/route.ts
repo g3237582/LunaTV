@@ -1,7 +1,7 @@
 /* eslint-disable no-console */
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getAuthInfoFromCookie, parseAuthInfo } from '@/lib/auth';
+import { getAuthInfoFromCookie, parseAuthInfo, readAuthCookieValue, writeAuthCookie } from '@/lib/auth';
 import { db } from '@/lib/db';
 import { refreshAccessToken } from '@/lib/middleware-auth';
 import { TOKEN_CONFIG } from '@/lib/refresh-token';
@@ -43,21 +43,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const authCookie = request.cookies.get('auth');
-    if (!authCookie?.value) {
+    const authCookieValue = readAuthCookieValue(request);
+    if (!authCookieValue) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const response = buildRefreshResponse(authCookie.value);
+    const response = buildRefreshResponse(authCookieValue);
     const expires = new Date();
     expires.setDate(expires.getDate() + 60);
-    response.cookies.set('auth', authCookie.value, {
-      path: '/',
-      expires,
-      sameSite: 'lax',
-      httpOnly: false,
-      secure: false,
-    });
+    writeAuthCookie(response, authCookieValue, expires);
     return response;
   }
 
@@ -118,12 +112,6 @@ export async function POST(request: NextRequest) {
 
   const response = buildRefreshResponse(newAuthData);
   const expires = new Date(authInfo.refreshExpires);
-  response.cookies.set('auth', newAuthData, {
-    path: '/',
-    expires,
-    sameSite: 'lax',
-    httpOnly: false,
-    secure: false,
-  });
+  writeAuthCookie(response, newAuthData, expires);
   return response;
 }
