@@ -5,10 +5,30 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 
+import { cn } from '@/lib/cn';
 import { getAllMangaReadRecords, getAllMangaShelf, saveMangaReadRecord, saveMangaShelf } from '@/lib/db.client';
 import type { MangaChapter, MangaDetail, MangaReadRecord, MangaShelfItem } from '@/lib/manga.types';
 import { processImageUrl } from '@/lib/utils';
 
+import {
+  LIBRARY_BUTTON,
+  LIBRARY_FOCUS,
+  LIBRARY_GHOST_BUTTON,
+  LIBRARY_MUTED,
+  LIBRARY_ROW,
+  LIBRARY_ROW_ACTIVE,
+  LIBRARY_SERIF,
+  LIBRARY_TEXT,
+  READER_CANVAS,
+  READER_CANVAS_SKELETON,
+  READER_HUD,
+  READER_SEGMENT,
+  READER_SEGMENT_ACTIVE,
+  READER_SEGMENT_IDLE,
+  READER_SHEET,
+  READER_SLIDER,
+  READER_TOOLTIP,
+} from '@/components/media/library';
 import ProxyImage from '@/components/ProxyImage';
 
 type ReadMode = 'single' | 'double' | 'vertical' | 'horizontal';
@@ -41,7 +61,7 @@ function MangaReadSkeleton({ readMode, pageGap }: { readMode: ReadMode; pageGap:
       <div className='flex min-h-[calc(100vh-8rem)] overflow-hidden' style={{ gap: `${pageGap}px` }}>
         {Array.from({ length: 2 }).map((_, index) => (
           <div key={index} className='flex min-w-full items-center justify-center px-1'>
-            <div className='h-full min-h-[calc(100vh-8rem)] w-full animate-pulse bg-gray-100 dark:bg-gray-900' />
+            <div className={cn('h-full min-h-[calc(100vh-8rem)] w-full', READER_CANVAS_SKELETON)} />
           </div>
         ))}
       </div>
@@ -56,7 +76,7 @@ function MangaReadSkeleton({ readMode, pageGap }: { readMode: ReadMode; pageGap:
           style={{ gap: `${pageGap}px` }}
         >
           {Array.from({ length: readMode === 'double' ? 2 : 1 }).map((_, index) => (
-            <div key={index} className='min-h-[calc(100vh-8rem)] animate-pulse bg-gray-100 dark:bg-gray-900' />
+            <div key={index} className={cn('min-h-[calc(100vh-8rem)]', READER_CANVAS_SKELETON)} />
           ))}
         </div>
       </div>
@@ -66,7 +86,7 @@ function MangaReadSkeleton({ readMode, pageGap }: { readMode: ReadMode; pageGap:
   return (
     <div className='flex flex-col' style={{ gap: `${pageGap}px` }}>
       {Array.from({ length: 4 }).map((_, index) => (
-        <div key={index} className='aspect-[3/4] animate-pulse bg-gray-100 dark:bg-gray-900' />
+        <div key={index} className={cn('aspect-[3/4]', READER_CANVAS_SKELETON)} />
       ))}
     </div>
   );
@@ -91,16 +111,16 @@ function ChapterEndActions({
       {nextHref ? (
         <Link
           href={nextHref}
-          className='w-full max-w-sm rounded-2xl bg-sky-600 px-4 py-3 text-center text-sm font-medium text-white transition hover:bg-sky-700'
+          className={cn('w-full max-w-sm px-4 py-3', LIBRARY_BUTTON)}
         >
           下一话：{nextName}
         </Link>
       ) : (
-        <div className='text-sm text-gray-500 dark:text-gray-400'>已经是最后一话</div>
+        <div className={cn('text-sm', LIBRARY_MUTED)}>已经是最后一话</div>
       )}
       <Link
         href={detailHref}
-        className='w-full max-w-sm rounded-2xl border border-gray-300 px-4 py-3 text-center text-sm font-medium text-gray-700 transition hover:bg-gray-100 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-900'
+        className={cn('w-full max-w-sm px-4 py-3', LIBRARY_GHOST_BUTTON)}
       >
         返回详情
       </Link>
@@ -837,27 +857,37 @@ export default function MangaReadPage() {
           onClick={() => setSettingsOpen(false)}
         >
           <div
-            className='w-full max-w-sm rounded-3xl border border-gray-200 bg-white p-5 shadow-xl dark:border-gray-700 dark:bg-gray-950'
+            className={cn(READER_SHEET, 'w-full max-w-sm p-5')}
             onClick={(e) => e.stopPropagation()}
           >
             <div className='mb-4'>
-              <div className='text-base font-semibold text-gray-900 dark:text-gray-100'>阅读设置</div>
-              <div className='mt-1 text-xs text-gray-500'>可继续扩展更多阅读参数</div>
+              <div
+                className={cn(
+                  'text-base font-semibold',
+                  LIBRARY_TEXT,
+                  LIBRARY_SERIF
+                )}
+              >
+                阅读设置
+              </div>
             </div>
 
             <div className='space-y-5'>
               <div>
-                <div className='mb-2 text-sm font-medium text-gray-700 dark:text-gray-200'>显示方式</div>
+                <div className={cn('mb-2 text-sm font-medium', LIBRARY_TEXT)}>
+                  显示方式
+                </div>
                 <div className='grid grid-cols-2 gap-2'>
                   {READ_MODE_OPTIONS.map((option) => (
                     <button
                       key={option.value}
                       type='button'
-                      className={`rounded-2xl px-3 py-2 text-sm transition ${
+                      className={cn(
+                        READER_SEGMENT,
                         readMode === option.value
-                          ? 'bg-sky-600 text-white'
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800'
-                      }`}
+                          ? READER_SEGMENT_ACTIVE
+                          : READER_SEGMENT_IDLE
+                      )}
                       onClick={() => setReadMode(option.value)}
                     >
                       {option.label}
@@ -867,17 +897,20 @@ export default function MangaReadPage() {
               </div>
 
               <div>
-                <div className='mb-2 text-sm font-medium text-gray-700 dark:text-gray-200'>缩放类型</div>
+                <div className={cn('mb-2 text-sm font-medium', LIBRARY_TEXT)}>
+                  缩放类型
+                </div>
                 <div className='grid grid-cols-2 gap-2'>
                   {SCALE_MODE_OPTIONS.map((option) => (
                     <button
                       key={option.value}
                       type='button'
-                      className={`rounded-2xl px-3 py-2 text-sm transition ${
+                      className={cn(
+                        READER_SEGMENT,
                         scaleMode === option.value
-                          ? 'bg-sky-600 text-white'
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800'
-                      }`}
+                          ? READER_SEGMENT_ACTIVE
+                          : READER_SEGMENT_IDLE
+                      )}
                       onClick={() => setScaleMode(option.value)}
                     >
                       {option.label}
@@ -887,9 +920,16 @@ export default function MangaReadPage() {
               </div>
 
               <div>
-                <div className='mb-2 flex items-center justify-between text-sm font-medium text-gray-700 dark:text-gray-200'>
+                <div
+                  className={cn(
+                    'mb-2 flex items-center justify-between text-sm font-medium',
+                    LIBRARY_TEXT
+                  )}
+                >
                   <span>图片间隔</span>
-                  <span className='text-xs text-gray-500'>{pageGap}px</span>
+                  <span className={cn('text-xs', LIBRARY_MUTED)}>
+                    {pageGap}px
+                  </span>
                 </div>
                 <input
                   type='range'
@@ -898,15 +938,17 @@ export default function MangaReadPage() {
                   step='2'
                   value={pageGap}
                   onChange={(e) => setPageGap(Number(e.target.value))}
-                  className='w-full accent-sky-600'
+                  className={READER_SLIDER}
                 />
-                <div className='mt-1 text-xs text-gray-500'>滚动阅读时，两张图片之间的间隔</div>
+                <div className={cn('mt-1 text-xs', LIBRARY_MUTED)}>
+                  滚动阅读时，两张图片之间的间隔
+                </div>
               </div>
 
               <div className='flex justify-end'>
                 <button
                   type='button'
-                  className='rounded-2xl bg-sky-600 px-4 py-2 text-sm font-medium text-white'
+                  className={LIBRARY_BUTTON}
                   onClick={() => setSettingsOpen(false)}
                 >
                   完成
@@ -920,14 +962,14 @@ export default function MangaReadPage() {
       {chapterListOpen && (
         <div className='fixed inset-0 z-40 bg-black/30' onClick={() => setChapterListOpen(false)}>
           <div
-            className='absolute right-0 top-14 h-[calc(100vh-3.5rem)] w-full max-w-sm overflow-y-auto border-l border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-950 sm:top-16 sm:h-[calc(100vh-4rem)]'
+            className='absolute right-0 top-14 h-[calc(100vh-3.5rem)] w-full max-w-sm overflow-y-auto border-l border-library-edge bg-library-card shadow-xl dark:border-library-night-edge dark:bg-library-night-card sm:top-16 sm:h-[calc(100vh-4rem)]'
             onClick={(event) => event.stopPropagation()}
           >
             <div className='p-4'>
               <div className='mb-3 flex items-center justify-end'>
                 <button
                   type='button'
-                  className='inline-flex items-center gap-2 rounded-2xl border border-gray-200 px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-100 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-900'
+                  className={cn(LIBRARY_GHOST_BUTTON, 'px-3 py-2')}
                   onClick={() => setChapterListDesc((prev) => !prev)}
                 >
                   {chapterListDesc ? <ArrowDownWideNarrow className='h-4 w-4' /> : <ArrowUpWideNarrow className='h-4 w-4' />}
@@ -942,15 +984,25 @@ export default function MangaReadPage() {
                       key={chapter.id}
                       ref={active ? activeChapterRef : null}
                       href={buildChapterHref(chapter)}
-                      className={`group relative block rounded-2xl px-4 py-3 text-sm transition ${
+                      className={cn(
+                        'group relative block px-4 py-3 text-sm transition-colors duration-200',
+                        LIBRARY_FOCUS,
                         active
-                          ? 'bg-sky-600 text-white'
-                          : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-900'
-                      }`}
+                          ? cn('rounded-md border', LIBRARY_ROW_ACTIVE)
+                          : cn(
+                              LIBRARY_ROW,
+                              'hover:border-library-ochre dark:hover:border-library-night-ochre'
+                            )
+                      )}
                       onClick={() => setChapterListOpen(false)}
                     >
                       <span className='block truncate'>{chapter.name}</span>
-                      <div className='absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-800 dark:bg-gray-900 text-white text-sm rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 ease-out whitespace-nowrap z-[100] pointer-events-none'>
+                      <div
+                        className={cn(
+                          'pointer-events-none invisible absolute bottom-full left-1/2 z-[100] mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg px-3 py-2 text-sm opacity-0 shadow-xl transition-all duration-200 ease-out group-hover:visible group-hover:opacity-100',
+                          READER_TOOLTIP
+                        )}
+                      >
                         <div className='text-sm'>{chapter.name}</div>
                       </div>
                     </Link>
@@ -969,25 +1021,33 @@ export default function MangaReadPage() {
         {showChapterComplete && (
           <div className='fixed inset-0 z-30 flex items-center justify-center bg-black/60 px-4' onClick={() => setShowChapterComplete(false)}>
             <div
-              className='w-full max-w-sm rounded-3xl border border-gray-200 bg-white p-6 text-center shadow-xl dark:border-gray-700 dark:bg-gray-950'
+              className={cn(READER_SHEET, 'w-full max-w-sm p-6 text-center')}
               onClick={(event) => event.stopPropagation()}
             >
-              <div className='text-lg font-semibold text-gray-900 dark:text-gray-100'>{chapterName} 阅读完毕</div>
-              <div className='mt-2 text-sm text-gray-500 dark:text-gray-400'>
+              <div
+                className={cn(
+                  'text-lg font-semibold',
+                  LIBRARY_TEXT,
+                  LIBRARY_SERIF
+                )}
+              >
+                {chapterName} 阅读完毕
+              </div>
+              <div className={cn('mt-2 text-sm', LIBRARY_MUTED)}>
                 {nextChapter ? '当前章节已读完，可继续阅读下一话' : '当前章节已读完'}
               </div>
               <div className='mt-6 flex flex-col gap-3'>
                 {nextChapter ? (
                   <Link
                     href={buildChapterHref(nextChapter)}
-                    className='rounded-2xl bg-sky-600 px-4 py-3 text-sm font-medium text-white transition hover:bg-sky-700'
+                    className={cn('px-4 py-3', LIBRARY_BUTTON)}
                   >
                     下一话：{nextChapter.name}
                   </Link>
                 ) : null}
                 <button
                   type='button'
-                  className='rounded-2xl border border-gray-200 px-4 py-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-900'
+                  className={cn('px-4 py-3', LIBRARY_GHOST_BUTTON)}
                   onClick={() => setShowChapterComplete(false)}
                 >
                   关闭
@@ -998,18 +1058,23 @@ export default function MangaReadPage() {
         )}
 
         <div
-          className={`fixed right-3 top-1/2 z-20 h-40 w-1 -translate-y-1/2 overflow-hidden rounded-full bg-gray-200/80 transition-all duration-200 dark:bg-gray-700/80 ${
+          className={`fixed right-3 top-1/2 z-20 h-40 w-1 -translate-y-1/2 overflow-hidden rounded-full bg-library-edge/80 transition-all duration-200 dark:bg-library-night-edge/80 ${
             controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
           }`}
         >
           <div
-            className='absolute bottom-0 left-0 w-full rounded-full bg-sky-500 transition-all'
+            className='absolute bottom-0 left-0 w-full rounded-full bg-library-ochre transition-all dark:bg-library-night-ochre'
             style={{ height: `${progress}%` }}
           />
         </div>
 
         {pages.length > 0 && (
-          <div className='pointer-events-none fixed bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/15 px-2 py-0.5 text-sm font-medium text-white/90 backdrop-blur-sm dark:bg-white/10 dark:text-white/85'>
+          <div
+            className={cn(
+              'pointer-events-none fixed bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full px-2.5 py-0.5 text-sm font-medium',
+              READER_HUD
+            )}
+          >
             {Math.min(activePage + 1, pages.length)}/{pages.length}
           </div>
         )}
@@ -1027,7 +1092,10 @@ export default function MangaReadPage() {
                   verticalPageRefs.current[index] = node;
                 }}
                 data-index={index}
-                className='scroll-mt-[calc(3.5rem+env(safe-area-inset-top))] overflow-hidden bg-gray-100 shadow-sm sm:scroll-mt-[calc(4rem+env(safe-area-inset-top))] dark:bg-gray-900'
+                className={cn(
+                  'scroll-mt-[calc(3.5rem+env(safe-area-inset-top))] overflow-hidden shadow-sm sm:scroll-mt-[calc(4rem+env(safe-area-inset-top))]',
+                  READER_CANVAS
+                )}
               >
                 <ProxyImage
                   originalSrc={page}
@@ -1053,7 +1121,7 @@ export default function MangaReadPage() {
           >
             {pages.map((page, index) => (
                 <div key={`${page}-${index}`} className='flex min-w-full snap-center items-center justify-center px-1'>
-                  <div className='w-full overflow-hidden bg-gray-100 shadow-sm dark:bg-gray-900'>
+                  <div className={cn('w-full overflow-hidden shadow-sm', READER_CANVAS)}>
                   <ProxyImage
                     originalSrc={page}
                     alt={`${chapterName}-${index + 1}`}
@@ -1078,7 +1146,7 @@ export default function MangaReadPage() {
               {pagedItems.map((page, index) => (
                 <div
                   key={`${page}-${index}`}
-                  className='overflow-hidden bg-gray-100 shadow-sm dark:bg-gray-900'
+                  className={cn('overflow-hidden shadow-sm', READER_CANVAS)}
                 >
                   <ProxyImage
                     originalSrc={page}
@@ -1089,7 +1157,7 @@ export default function MangaReadPage() {
                 </div>
               ))}
               {readMode === 'double' && pagedItems.length === 1 && (
-                <div className='hidden rounded-[24px] bg-transparent md:block' />
+                <div className='hidden md:block' />
               )}
             </div>
           </div>

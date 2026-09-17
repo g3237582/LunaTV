@@ -262,13 +262,13 @@ div[data-media-provider] video {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #0284c7;
+  color: #a8611f;
   animation: reader-book-flip 1.5s ease-in-out infinite;
   transform-origin: center;
 }
 
 .dark .reader-book-loader {
-  color: #38bdf8;
+  color: #d9924a;
 }
 
 
@@ -333,4 +333,26 @@ div[data-media-provider] video {
   .tv-focused {
     transition: none;
   }
+}
+
+/* 骨架屏微光动画与配色变量 - 原为 ImagePlaceholder 的内联 <style>，
+   提升为全局单例：此前每个实例都会重复输出一份 keyframes 与 :root 变量。
+   改为只跟随 .dark 类，不再跟随系统偏好，避免 hydration 前闪错配色。 */
+@keyframes shine {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+:root {
+  --skeleton-color: #f0f0f0;
+  --skeleton-highlight: #e0e0e0;
+}
+
+.dark {
+  --skeleton-color: #2d2d2d;
+  --skeleton-highlight: #3d3d3d;
 }
