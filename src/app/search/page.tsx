@@ -25,6 +25,7 @@ import { createPortal } from 'react-dom';
 
 import { isAnimeCategoryText } from '@/lib/anime-keyword-expr';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { loadTraditionalToSimplifiedConverter } from '@/lib/danmaku/traditional-to-simplified';
 import {
   addSearchHistory,
   clearSearchHistory,
@@ -32,8 +33,18 @@ import {
   getSearchHistory,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
-import { SearchResult } from '@/lib/types';
+import {
+  clampSearchPage,
+  searchListPageCount,
+  searchListPageOf,
+} from '@/lib/search-list-paging';
+import {
+  groupSearchResults,
+  pickGroupDisplay,
+} from '@/lib/search-result-aggregator';
 import { appendSpecialSourceParam, isSpecialSourcesEnabledOnDevice } from '@/lib/special-source.client';
+import { SearchResult } from '@/lib/types';
+import { usePosterHashes } from '@/lib/use-poster-hashes';
 import { processImageUrl } from '@/lib/utils';
 
 import AcgSearch from '@/components/AcgSearch';
@@ -42,13 +53,13 @@ import ImageViewer from '@/components/ImageViewer';
 import PageLayout from '@/components/PageLayout';
 import PansouSearch, { CLOUD_TYPE_NAMES } from '@/components/PansouSearch';
 import ProxyImage from '@/components/ProxyImage';
+import SearchPaginationBar from '@/components/SearchPaginationBar';
 import SearchResultFilter, {
   SearchFilterCategory,
 } from '@/components/SearchResultFilter';
 import SearchSuggestions from '@/components/SearchSuggestions';
 import VideoCard, { VideoCardHandle } from '@/components/VideoCard';
 import VirtualScrollableGrid from '@/components/VirtualScrollableGrid';
-import { loadTraditionalToSimplifiedConverter } from '@/lib/danmaku/traditional-to-simplified';
 
 const PANSOU_CLOUD_TYPE_OPTIONS = Object.entries(CLOUD_TYPE_NAMES).map(
   ([value, label]) => ({ value, label })
@@ -295,6 +306,7 @@ function SearchPageClient() {
   const [viewMode, setViewMode] = useState<'agg' | 'all'>(() => {
     return getDefaultAggregate() ? 'agg' : 'all';
   });
+  const [currentPage, setCurrentPage] = useState(1);
   const [resultDisplayMode, setResultDisplayMode] = useState<'card' | 'list'>(
     () => {
       if (typeof window !== 'undefined') {
@@ -356,14 +368,6 @@ function SearchPageClient() {
     const bNum = parseInt(bYear, 10);
 
     return order === 'asc' ? aNum - bNum : bNum - aNum;
-  };
-
-  // 规范化标题用于聚合（去除特殊符号、括号、空格和全角空格）
-  const normalizeTitle = (title: string) => {
-    return title
-      .replace(/[\s\u3000]/g, '') // 去除空格和全角空格
-      .replace(/[()（）[\]【】{}「」『』<>《》]/g, '') // 去除各种括号
-      .replace(/[^\w\u4e00-\u9fa5]/g, ''); // 去除特殊符号，保留字母、数字、下划线和中文
   };
 
   // 辅助函数：获取视频类型
@@ -430,73 +434,11 @@ function SearchPageClient() {
     );
   }, [searchResults, submittedSearchQuery, exactSearch]);
 
-  // 聚合后的结果（按标题和年份分组）
-  const aggregatedResults = useMemo(() => {
-    //===== 阶段1：按 normalizedTitle-type 初步分组 =====
-    const preliminaryMap = new Map<string, SearchResult[]>();
-
-    allExactSearchResults.forEach((item) => {
-      const normalizedTitle = normalizeTitle(item.title);
-      const type = getType(item);
-      const preliminaryKey = `${normalizedTitle}-${type}`;
-
-      const arr = preliminaryMap.get(preliminaryKey) || [];
-      arr.push(item);
-      preliminaryMap.set(preliminaryKey, arr);
-    });
-
-    //===== 阶段2：智能年份推断和最终分组 =====
-    const finalMap = new Map<string, SearchResult[]>();
-    const keyOrder: string[] = [];
-
-    preliminaryMap.forEach((group, preliminaryKey) => {
-      // 分离有年份和无年份的结果
-      const withYear = new Map<string, SearchResult[]>();
-      const withoutYear: SearchResult[] = [];
-
-      group.forEach((item) => {
-        const year = item.year;
-
-        // 判断是否为有效年份：必须是4位数字，且不能是空字符串或'unknown'
-        if (
-          year &&
-          year.trim() !== '' &&
-          year !== 'unknown' &&
-          /^\d{4}$/.test(year)
-        ) {
-          // 有有效年份
-          const arr = withYear.get(year) || [];
-          arr.push(item);
-          withYear.set(year, arr);
-        } else {
-          // 无年份（包括空字符串、'unknown'、null、undefined等）
-          withoutYear.push(item);
-        }
-      });
-
-      // 如果有有效年份组
-      if (withYear.size > 0) {
-        // 将无年份的结果复制到每个有年份的组中
-        withYear.forEach((yearGroup, year) => {
-          const finalKey = `${preliminaryKey}-${year}`;
-          // 合并：有年份的 + 无年份的（复制）
-          const mergedGroup = [...yearGroup, ...withoutYear];
-          finalMap.set(finalKey, mergedGroup);
-          keyOrder.push(finalKey);
-        });
-      } else if (withoutYear.length > 0) {
-        // 如果完全没有年份信息，单独成组
-        const finalKey = `${preliminaryKey}-unknown`;
-        finalMap.set(finalKey, withoutYear);
-        keyOrder.push(finalKey);
-      }
-    });
-
-    // 按出现顺序返回聚合结果
-    return keyOrder.map(
-      (key) => [key, finalMap.get(key)!] as [string, SearchResult[]]
-    );
-  }, [allExactSearchResults]);
+  const posterHashes = usePosterHashes(allExactSearchResults);
+  const aggregatedResults = useMemo(
+    () => groupSearchResults(allExactSearchResults, posterHashes),
+    [allExactSearchResults, posterHashes]
+  );
 
   // 当聚合结果变化时，如果某个聚合已存在，则调用其卡片 ref 的 set 方法增量更新
   useEffect(() => {
@@ -781,6 +723,45 @@ function SearchPageClient() {
         : bTitle.localeCompare(aTitle);
     });
   }, [aggregatedResults, filterAgg, searchQuery]);
+
+  const resultItems =
+    viewMode === 'agg' ? filteredAggResults : filteredAllResults;
+  const totalItems = resultItems.length;
+  const pageCount = searchListPageCount(totalItems);
+  const safePage = clampSearchPage(currentPage, pageCount);
+  const pagedAggResults =
+    viewMode === 'agg' ? searchListPageOf(filteredAggResults, safePage) : [];
+  const pagedAllResults =
+    viewMode === 'all' ? searchListPageOf(filteredAllResults, safePage) : [];
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [
+    submittedSearchQuery,
+    viewMode,
+    exactSearch,
+    filterAll.source,
+    filterAll.title,
+    filterAll.year,
+    filterAll.yearOrder,
+    filterAgg.source,
+    filterAgg.title,
+    filterAgg.year,
+    filterAgg.yearOrder,
+  ]);
+
+  const goToPage = (page: number) => {
+    const next = clampSearchPage(page, pageCount);
+    if (next === currentPage) {
+      return;
+    }
+    setCurrentPage(next);
+    try {
+      document.body.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch {
+      document.body.scrollTop = 0;
+    }
+  };
 
   const useVirtualGrid = useMemo(() => {
     const cardCount =
@@ -2251,10 +2232,9 @@ function SearchPageClient() {
 
                       const resultChildren =
                         viewMode === 'agg'
-                          ? filteredAggResults.map(([mapKey, group]) => {
-                              const title = group[0]?.title || '';
-                              const poster = group[0]?.poster || '';
-                              const year = group[0]?.year || 'unknown';
+                          ? pagedAggResults.map(([mapKey, group]) => {
+                              const { title, poster, year } =
+                                pickGroupDisplay(group);
                               const desc =
                                 group.find((entry) => entry.desc?.trim())
                                   ?.desc || '';
@@ -2263,21 +2243,11 @@ function SearchPageClient() {
                                   ?.vod_remarks || '';
                               const { episodes, source_names, douban_id } =
                                 computeGroupStats(group);
-
-                              const lastDashIndex = mapKey.lastIndexOf('-');
-                              const secondLastDashIndex = mapKey.lastIndexOf(
-                                '-',
-                                lastDashIndex - 1
-                              );
-                              const type =
-                                secondLastDashIndex > 0
-                                  ? (mapKey.substring(
-                                      secondLastDashIndex + 1,
-                                      lastDashIndex
-                                    ) as 'movie' | 'tv')
-                                  : episodes === 1
-                                  ? 'movie'
-                                  : 'tv';
+                              const type = group[0]
+                                ? getType(group[0])
+                                : episodes === 1
+                                ? 'movie'
+                                : 'tv';
 
                               if (!groupStatsRef.current.has(mapKey)) {
                                 groupStatsRef.current.set(mapKey, {
@@ -2340,7 +2310,7 @@ function SearchPageClient() {
                                 </div>
                               );
                             })
-                          : filteredAllResults.map((item) => {
+                          : pagedAllResults.map((item) => {
                               const type =
                                 item.episodes.length > 1 ? 'tv' : 'movie';
                               const itemIsAnime = isAnimeCategoryText(
@@ -2413,7 +2383,7 @@ function SearchPageClient() {
 
                       return (
                         <div
-                          key={`search-results-${viewMode}-${resultDisplayMode}`}
+                          key={`search-results-${viewMode}-${resultDisplayMode}-${safePage}`}
                           className={
                             resultDisplayMode === 'list'
                               ? listClassName
@@ -2424,6 +2394,14 @@ function SearchPageClient() {
                         </div>
                       );
                     })()
+                  )}
+                  {searchResults.length > 0 && (
+                    <SearchPaginationBar
+                      totalItems={totalItems}
+                      page={safePage}
+                      pageCount={pageCount}
+                      onPageChanged={goToPage}
+                    />
                   )}
                 </>
               ) : activeTab === 'pansou' ? (
