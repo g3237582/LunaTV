@@ -17,7 +17,25 @@ const GENERIC_POSTER_NAMES = new Set([
   'none',
   'null',
   'avatar',
+  'upload',
+  'static',
+  'images',
+  'pics',
 ]);
+
+const CHINESE_DIGITS: Record<string, number> = {
+  零: 0,
+  一: 1,
+  二: 2,
+  两: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+};
 
 const BRACKET_TAG = /【[^】]*】|\[[^\]]*\]/g;
 const TRAILING_YEAR = /[(（]\s*(19|20)\d{2}\s*[)）]/g;
@@ -26,12 +44,17 @@ const QUALITY_TAG =
 const PUNCTUATION =
   /[\s`~!@#$%^&*()_\-+=[\]{}\\|;:'",.<>/?·—–【】（）、，。：；！？「」『』《》]+/g;
 const DIGIT_RUN = /\d{6,}/;
+const HEX_RUN = /^[a-f0-9]{10,}$/;
+const CHINESE_SEASON = /第([零一二两三四五六七八九十百]+)([季部])/g;
+const SEASON_TOKEN = /第\d+[季部]|s\d+|season\d+/;
+const DATE_LIKE = /^(19|20)\d{4,6}$/;
+const MIXED_ALNUM = /(?=.*[a-z])(?=.*\d)/;
 const YEAR_MATCH = /(19|20)\d{2}/;
 
 /**
  * Groups source search hits into unique work cards.
  * Two hits belong together when they share a normalized title (and year),
- * a distinctive poster file/URL, or the same Douban id.
+ * a season-qualified title, a distinctive poster file/URL, or the same Douban id.
  */
 export function groupSearchResults(
   results: SearchResult[]
@@ -97,8 +120,14 @@ export function groupSearchResults(
     }
   });
 
-  byTitle.forEach((indices) => {
-    unionByYear(results, indices, union);
+  byTitle.forEach((indices, titleKey) => {
+    if (hasSeasonToken(titleKey)) {
+      for (let offset = 1; offset < indices.length; offset += 1) {
+        union(indices[0], indices[offset]);
+      }
+    } else {
+      unionByYear(results, indices, union);
+    }
   });
 
   const buckets = new Map<number, SearchResult[]>();
@@ -124,12 +153,22 @@ export function pickGroupDisplay(group: SearchResult[]): {
 } {
   const title = group.find((item) => item.title?.trim())?.title ?? '';
   const poster = group.find((item) => item.poster?.trim())?.poster ?? '';
-  const yearItem = group.find((item) => normalizeYear(item.year));
-  return {
-    title,
-    poster,
-    year: yearItem ? normalizeYear(yearItem.year) : group[0]?.year || 'unknown',
-  };
+  const yearCounts = new Map<string, number>();
+  group.forEach((item) => {
+    const year = normalizeYear(item.year);
+    if (year) {
+      yearCounts.set(year, (yearCounts.get(year) || 0) + 1);
+    }
+  });
+  let year = group[0]?.year || 'unknown';
+  let max = 0;
+  yearCounts.forEach((count, value) => {
+    if (count > max) {
+      max = count;
+      year = value;
+    }
+  });
+  return { title, poster, year };
 }
 
 export function normalizeTitle(raw: string): string {
@@ -137,12 +176,52 @@ export function normalizeTitle(raw: string): string {
   BRACKET_TAG.lastIndex = 0;
   TRAILING_YEAR.lastIndex = 0;
   QUALITY_TAG.lastIndex = 0;
+  CHINESE_SEASON.lastIndex = 0;
   PUNCTUATION.lastIndex = 0;
   title = title.replace(BRACKET_TAG, '');
   title = title.replace(TRAILING_YEAR, '');
   title = title.replace(QUALITY_TAG, '');
+  title = title.replace(CHINESE_SEASON, (_full, numeral, suffix) => {
+    const number = parseChineseNumber(numeral);
+    return number == null ? _full : `第${number}${suffix}`;
+  });
   title = title.replace(PUNCTUATION, '');
   return title;
+}
+
+export function hasSeasonToken(titleKey: string): boolean {
+  SEASON_TOKEN.lastIndex = 0;
+  return SEASON_TOKEN.test(titleKey);
+}
+
+export function parseChineseNumber(raw: string): number | null {
+  if (raw === '十') {
+    return 10;
+  }
+  if (CHINESE_DIGITS[raw] !== undefined) {
+    return CHINESE_DIGITS[raw];
+  }
+  if (raw.startsWith('十')) {
+    const ones = CHINESE_DIGITS[raw.slice(1)];
+    return ones === undefined ? null : 10 + ones;
+  }
+  if (raw.endsWith('十')) {
+    const tens = CHINESE_DIGITS[raw.slice(0, -1)];
+    return tens === undefined ? null : tens * 10;
+  }
+  const tenIndex = raw.indexOf('十');
+  if (tenIndex <= 0) {
+    return null;
+  }
+  const tens = CHINESE_DIGITS[raw.slice(0, tenIndex)];
+  const ones =
+    tenIndex + 1 < raw.length
+      ? CHINESE_DIGITS[raw.slice(tenIndex + 1)] ?? 0
+      : 0;
+  if (tens === undefined || ones === undefined) {
+    return null;
+  }
+  return tens * 10 + ones;
 }
 
 export function normalizeYear(raw: string): string {
@@ -156,36 +235,52 @@ export function posterKeys(poster: string): string[] {
     return [];
   }
 
+  const unwrapped = unwrapProxyUrl(trimmed);
   let url: URL | null = null;
   try {
-    url = new URL(trimmed);
+    url = new URL(unwrapped);
   } catch {
     try {
-      url = new URL(trimmed, 'https://placeholder.invalid');
+      url = new URL(unwrapped, 'https://placeholder.invalid');
     } catch {
       return [];
     }
   }
 
-  const path = url.pathname.toLowerCase();
+  let path = url.pathname.toLowerCase();
+  if (path.endsWith('/')) {
+    path = path.slice(0, -1);
+  }
   if (!path) {
     return [];
   }
   const file = path.split('/').pop() || '';
   const dot = file.lastIndexOf('.');
   const name = dot <= 0 ? file : file.slice(0, dot);
-  if (GENERIC_POSTER_NAMES.has(name)) {
-    return [];
-  }
-
-  const keys: string[] = [];
+  const keys = new Set<string>();
   if (url.host && url.host !== 'placeholder.invalid') {
-    keys.push(`url:${url.host.toLowerCase()}${path}`);
+    keys.add(`url:${url.host.toLowerCase()}${path}`);
   }
-  if (isDistinctivePosterName(name)) {
-    keys.push(`file:${file}`);
+  if (!GENERIC_POSTER_NAMES.has(name) && isDistinctivePosterName(name)) {
+    keys.add(`file:${file}`);
   }
-  return keys;
+  if (hasDistinctivePathSegment(path)) {
+    keys.add(`path:${path}`);
+  }
+  return Array.from(keys);
+}
+
+function unwrapProxyUrl(raw: string): string {
+  try {
+    const url = new URL(raw, 'https://placeholder.invalid');
+    const nested = url.searchParams.get('url');
+    if (nested) {
+      return nested;
+    }
+  } catch {
+    return raw;
+  }
+  return raw;
 }
 
 function unionByYear(
@@ -224,4 +319,23 @@ function isDistinctivePosterName(name: string): boolean {
   }
   DIGIT_RUN.lastIndex = 0;
   return DIGIT_RUN.test(name);
+}
+
+function hasDistinctivePathSegment(path: string): boolean {
+  return path.split('/').some((segment) => {
+    if (!segment || GENERIC_POSTER_NAMES.has(segment)) {
+      return false;
+    }
+    if (DATE_LIKE.test(segment)) {
+      return false;
+    }
+    if (HEX_RUN.test(segment)) {
+      return true;
+    }
+    if (segment.length >= 10 && MIXED_ALNUM.test(segment)) {
+      return true;
+    }
+    DIGIT_RUN.lastIndex = 0;
+    return DIGIT_RUN.test(segment);
+  });
 }
