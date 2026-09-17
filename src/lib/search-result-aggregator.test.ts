@@ -72,6 +72,59 @@ describe('groupSearchResults', () => {
     expect(grouped).toHaveLength(2);
   });
 
+  it('merges a trailing season number with the spelled-out season', () => {
+    const grouped = groupSearchResults([
+      result({ id: '1', title: '某剧4', source: '源A' }),
+      result({ id: '2', title: '某剧第四季', source: '源B' }),
+      result({ id: '3', title: '某剧 第4季', source: '源C' }),
+    ]);
+    expect(grouped).toHaveLength(1);
+  });
+
+  it('keeps a numbered season out of the unqualified series even with the same poster hash', () => {
+    const poster = 'https://cdn.example.com/upload/vod/p2884280704.jpg';
+    const grouped = groupSearchResults(
+      [
+        result({ id: '1', title: '某剧', poster, source: '源A' }),
+        result({ id: '2', title: '某剧4', poster, source: '源B' }),
+      ],
+      { [poster]: '0123456789abcdef' }
+    );
+    expect(grouped).toHaveLength(2);
+  });
+
+  it('does not merge different seasons that only share a poster file', () => {
+    const poster =
+      'https://cdn.example.com/upload/vod/p2884280704.jpg?imageView=1';
+    const grouped = groupSearchResults([
+      result({ id: '1', title: '某剧第一季', poster }),
+      result({ id: '2', title: '某剧第四季', poster }),
+    ]);
+    expect(grouped).toHaveLength(2);
+  });
+
+  it('does not merge different seasons that only share a poster hash', () => {
+    const grouped = groupSearchResults(
+      [
+        result({
+          id: '1',
+          title: '某剧第一季',
+          poster: 'https://a.example.com/a.jpg',
+        }),
+        result({
+          id: '2',
+          title: '某剧第四季',
+          poster: 'https://b.example.com/b.jpg',
+        }),
+      ],
+      {
+        'https://a.example.com/a.jpg': '0123456789abcdef',
+        'https://b.example.com/b.jpg': '0123456789abcdef',
+      }
+    );
+    expect(grouped).toHaveLength(2);
+  });
+
   it('merges commentary retitles that share a poster path', () => {
     const grouped = groupSearchResults([
       result({

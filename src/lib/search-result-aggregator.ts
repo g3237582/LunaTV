@@ -48,6 +48,10 @@ const DIGIT_RUN = /\d{6,}/;
 const HEX_RUN = /^[a-f0-9]{10,}$/;
 const CHINESE_SEASON = /第([零一二两三四五六七八九十百]+)([季部])/g;
 const SEASON_TOKEN = /第\d+[季部]|s\d+|season\d+/;
+const EXPLICIT_SEASON = /^(.*)第(\d+)[季部]$/;
+const SEASON_WORD = /^(.*)season(\d{1,2})$/;
+const SEASON_S = /^(.*)s(\d{1,2})$/;
+const TRAILING_PART = /^(.*[^\d])(\d{1,2})$/;
 const DATE_LIKE = /^(19|20)\d{4,6}$/;
 const MIXED_ALNUM = /(?=.*[a-z])(?=.*\d)/;
 const YEAR_MATCH = /(19|20)\d{2}/;
@@ -56,6 +60,8 @@ const YEAR_MATCH = /(19|20)\d{2}/;
  * Groups source search hits into unique work cards.
  * Two hits belong together when they share a normalized title (and year),
  * a season-qualified title, a distinctive poster file/URL, or the same Douban id.
+ * Poster/hash unions are skipped when season/part numbers conflict, so a
+ * numbered season is never swallowed by the series or another season.
  */
 export function groupSearchResults(
   results: SearchResult[],
@@ -89,12 +95,16 @@ export function groupSearchResults(
     }
   };
 
+  const parts = results.map((result) =>
+    parseTitleParts(normalizeTitle(result.title))
+  );
+
   const byTitle = new Map<string, number[]>();
-  const byPoster = new Map<string, number>();
+  const byPoster = new Map<string, number[]>();
   const byDouban = new Map<string, number>();
 
   results.forEach((result, index) => {
-    const titleKey = normalizeTitle(result.title);
+    const titleKey = parts[index].canonical;
     if (titleKey) {
       const indices = byTitle.get(titleKey);
       if (indices) {
@@ -105,10 +115,10 @@ export function groupSearchResults(
     }
     posterKeys(result.poster).forEach((posterKey) => {
       const existing = byPoster.get(posterKey);
-      if (existing !== undefined) {
-        union(existing, index);
+      if (existing) {
+        existing.push(index);
       } else {
-        byPoster.set(posterKey, index);
+        byPoster.set(posterKey, [index]);
       }
     });
     if (result.douban_id && result.douban_id > 0) {
@@ -122,10 +132,13 @@ export function groupSearchResults(
     }
   });
 
-  unionByPosterHashes(results, posterHashes, union);
+  byPoster.forEach((indices) => {
+    unionCompatible(indices, parts, union);
+  });
+  unionByPosterHashes(results, posterHashes, parts, union);
 
-  byTitle.forEach((indices, titleKey) => {
-    if (hasSeasonToken(titleKey)) {
+  byTitle.forEach((indices) => {
+    if (parts[indices[0]].part != null) {
       for (let offset = 1; offset < indices.length; offset += 1) {
         union(indices[0], indices[offset]);
       }
@@ -194,8 +207,69 @@ export function normalizeTitle(raw: string): string {
 }
 
 export function hasSeasonToken(titleKey: string): boolean {
-  SEASON_TOKEN.lastIndex = 0;
-  return SEASON_TOKEN.test(titleKey);
+  return parseTitleParts(titleKey).part != null || SEASON_TOKEN.test(titleKey);
+}
+
+export interface TitleParts {
+  base: string;
+  part: number | null;
+  canonical: string;
+}
+
+export function parseTitleParts(titleKey: string): TitleParts {
+  const explicit = titleKey.match(EXPLICIT_SEASON);
+  if (explicit?.[1]) {
+    return {
+      base: explicit[1],
+      part: Number(explicit[2]),
+      canonical: `${explicit[1]}#${Number(explicit[2])}`,
+    };
+  }
+  const seasonWord = titleKey.match(SEASON_WORD);
+  if (seasonWord?.[1]) {
+    const number = Number(seasonWord[2]);
+    if (number >= 1 && number <= 99) {
+      return {
+        base: seasonWord[1],
+        part: number,
+        canonical: `${seasonWord[1]}#${number}`,
+      };
+    }
+  }
+  const seasonS = titleKey.match(SEASON_S);
+  if (seasonS?.[1]) {
+    const number = Number(seasonS[2]);
+    if (number >= 1 && number <= 99) {
+      return {
+        base: seasonS[1],
+        part: number,
+        canonical: `${seasonS[1]}#${number}`,
+      };
+    }
+  }
+  const trailing = titleKey.match(TRAILING_PART);
+  if (trailing) {
+    const base = trailing[1];
+    const number = Number(trailing[2]);
+    if (base.length >= 2 && number >= 1 && number <= 99) {
+      return {
+        base,
+        part: number,
+        canonical: `${base}#${number}`,
+      };
+    }
+  }
+  return { base: titleKey, part: null, canonical: titleKey };
+}
+
+function titlePartsConflict(left: TitleParts, right: TitleParts): boolean {
+  if (left.part == null && right.part == null) {
+    return false;
+  }
+  if (left.part == null || right.part == null) {
+    return true;
+  }
+  return left.part !== right.part;
 }
 
 export function parseChineseNumber(raw: string): number | null {
@@ -320,6 +394,7 @@ function unionByYear(
 function unionByPosterHashes(
   results: SearchResult[],
   posterHashes: Record<string, string>,
+  parts: TitleParts[],
   union: (left: number, right: number) => void
 ) {
   const hashKeys = Object.keys(posterHashes);
@@ -340,9 +415,7 @@ function unionByPosterHashes(
     }
   });
   byHash.forEach((indices) => {
-    for (let offset = 1; offset < indices.length; offset += 1) {
-      union(indices[0], indices[offset]);
-    }
+    unionCompatible(indices, parts, union);
   });
   const unique = Array.from(byHash.keys());
   for (let left = 0; left < unique.length; left += 1) {
@@ -353,10 +426,39 @@ function unionByPosterHashes(
       const leftIndices = byHash.get(unique[left]);
       const rightIndices = byHash.get(unique[right]);
       if (leftIndices && rightIndices) {
-        union(leftIndices[0], rightIndices[0]);
+        unionCompatibleAcross(leftIndices, rightIndices, parts, union);
       }
     }
   }
+}
+
+function unionCompatible(
+  indices: number[],
+  parts: TitleParts[],
+  union: (left: number, right: number) => void
+) {
+  for (let i = 0; i < indices.length; i += 1) {
+    for (let j = i + 1; j < indices.length; j += 1) {
+      if (!titlePartsConflict(parts[indices[i]], parts[indices[j]])) {
+        union(indices[i], indices[j]);
+      }
+    }
+  }
+}
+
+function unionCompatibleAcross(
+  left: number[],
+  right: number[],
+  parts: TitleParts[],
+  union: (left: number, right: number) => void
+) {
+  left.forEach((i) => {
+    right.forEach((j) => {
+      if (!titlePartsConflict(parts[i], parts[j])) {
+        union(i, j);
+      }
+    });
+  });
 }
 
 function isDistinctivePosterName(name: string): boolean {
