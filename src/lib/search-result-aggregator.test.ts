@@ -1,0 +1,131 @@
+import { groupSearchResults } from '@/lib/search-result-aggregator';
+import { SearchResult } from '@/lib/types';
+
+function result(partial: {
+  id: string;
+  title: string;
+  year?: string;
+  episodes?: number;
+  source?: string;
+  poster?: string;
+  douban_id?: number;
+}): SearchResult {
+  const episodeCount = partial.episodes ?? 1;
+  return {
+    id: partial.id,
+    title: partial.title,
+    poster: partial.poster ?? '',
+    episodes: Array.from({ length: episodeCount }, () => 'e'),
+    episodes_titles: [],
+    source: partial.source ?? 'a',
+    source_name: partial.source ?? 'a',
+    year: partial.year ?? '2024',
+    douban_id: partial.douban_id,
+  };
+}
+
+describe('groupSearchResults', () => {
+  it('merges titles that only differ by space, brackets, or quality tags', () => {
+    const grouped = groupSearchResults([
+      result({ id: '1', title: '流浪地球', source: '源A' }),
+      result({ id: '2', title: ' 流浪地球 ', source: '源B' }),
+      result({ id: '3', title: '【4K】流浪地球', source: '源C' }),
+      result({ id: '4', title: '流浪地球(2024)', source: '源D' }),
+      result({ id: '5', title: '另一部', source: '源A' }),
+    ]);
+    expect(grouped).toHaveLength(2);
+    expect(grouped[0][1].map((item) => item.id)).toEqual(['1', '2', '3', '4']);
+  });
+
+  it('merges the same work when one source omits the year', () => {
+    const grouped = groupSearchResults([
+      result({ id: '1', title: '同一部', year: '2024', source: '源A' }),
+      result({ id: '2', title: '同一部', year: '', source: '源B' }),
+    ]);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0][1]).toHaveLength(2);
+  });
+
+  it('does not merge the same title from different years', () => {
+    const grouped = groupSearchResults([
+      result({ id: '1', title: '同一部', year: '2019', source: '源A' }),
+      result({ id: '2', title: '同一部', year: '2023', source: '源B' }),
+    ]);
+    expect(grouped).toHaveLength(2);
+  });
+
+  it('merges movie and series cuts of the same title', () => {
+    const grouped = groupSearchResults([
+      result({ id: '1', title: '同一部', episodes: 1, source: '源A' }),
+      result({ id: '2', title: '同一部', episodes: 24, source: '源B' }),
+    ]);
+    expect(grouped).toHaveLength(1);
+  });
+
+  it('merges different titles that share a distinctive poster', () => {
+    const poster =
+      'https://cdn.example.com/upload/vod/p2884280704.jpg?imageView=1';
+    const grouped = groupSearchResults([
+      result({
+        id: '1',
+        title: 'The Wandering Earth',
+        source: '源A',
+        poster,
+      }),
+      result({
+        id: '2',
+        title: '流浪地球',
+        source: '源B',
+        poster: 'https://img.other.com/static/p2884280704.jpg',
+      }),
+    ]);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0][1]).toHaveLength(2);
+  });
+
+  it('does not merge different titles that only share a generic poster name', () => {
+    const grouped = groupSearchResults([
+      result({
+        id: '1',
+        title: '影片甲',
+        source: '源A',
+        poster: 'https://a.example.com/images/cover.jpg',
+      }),
+      result({
+        id: '2',
+        title: '影片乙',
+        source: '源B',
+        poster: 'https://b.example.com/images/cover.jpg',
+      }),
+    ]);
+    expect(grouped).toHaveLength(2);
+  });
+
+  it('does not merge empty posters', () => {
+    const grouped = groupSearchResults([
+      result({ id: '1', title: '影片甲', source: '源A', poster: '' }),
+      result({ id: '2', title: '影片乙', source: '源B', poster: '' }),
+    ]);
+    expect(grouped).toHaveLength(2);
+  });
+
+  it('merges by douban id even when titles differ', () => {
+    const grouped = groupSearchResults([
+      result({ id: '1', title: '英文名', source: '源A', douban_id: 12345 }),
+      result({ id: '2', title: '中文名', source: '源B', douban_id: 12345 }),
+    ]);
+    expect(grouped).toHaveLength(1);
+  });
+
+  it('keeps a stable key when later hits join an existing group', () => {
+    const first = groupSearchResults([
+      result({ id: '1', title: '同一部', source: '源A' }),
+    ]);
+    const second = groupSearchResults([
+      result({ id: '1', title: '同一部', source: '源A' }),
+      result({ id: '2', title: '【4K】同一部', source: '源B' }),
+    ]);
+    expect(first[0][0]).toBe(second[0][0]);
+    expect(second[0][1]).toHaveLength(2);
+  });
+});

@@ -24,6 +24,8 @@ COPY . .
 
 # 在构建阶段也显式设置 DOCKER_ENV，
 ENV DOCKER_ENV=true
+# 2GB 机器上限制 Node 堆，避免 next build OOM
+ENV NODE_OPTIONS=--max-old-space-size=1536
 
 # 生成生产构建
 RUN pnpm run build
