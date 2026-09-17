@@ -103,6 +103,7 @@ export default function BooksHomePage() {
   }, []);
 
   const currentRecord = readRecords[0];
+  // 顶部「正在读」大卡已经摊开第一本，这里只列其余的，避免同一本重复出现。
   const recentRecords = readRecords.slice(1, 13);
 
   return (
@@ -147,10 +148,7 @@ export default function BooksHomePage() {
       )}
 
       {recentRecords.length > 0 ? (
-        <MediaRail
-          title='最近在读'
-          subtitle={`共 ${readRecords.length} 本读过`}
-        >
+        <MediaRail title='最近在读'>
           {recentRecords.map((record) => (
             <div
               key={`${record.sourceId}-${record.bookId}`}

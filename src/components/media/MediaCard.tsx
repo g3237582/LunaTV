@@ -81,7 +81,10 @@ export default function MediaCard({
       <div className='space-y-1 px-2.5 pb-2.5 pt-2'>
         <div
           className={cn(
-            'line-clamp-2 min-h-[2.4rem] text-[13px] font-medium leading-[1.35] text-library-ink dark:text-library-night-ink',
+            // 2.7em = 13px × 1.35 × 2，正好两行：撑高到两行是为了名字短的卡片
+            // 也和对面的长名字一样高，但绝不能超过两行——min-height 比两行多出来的
+            // 那几像素会让被 -webkit-line-clamp 截掉的第三行从底下露出字头。
+            'line-clamp-2 min-h-[2.7em] text-[13px] font-medium leading-[1.35] text-library-ink dark:text-library-night-ink',
             LIBRARY_SERIF
           )}
         >

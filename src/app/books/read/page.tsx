@@ -2032,6 +2032,9 @@ export default function BookReadPage() {
   const [cacheHit, setCacheHit] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
+  const [tocExpandOverrides, setTocExpandOverrides] = useState<
+    Record<string, boolean>
+  >({});
   const [settings, setSettings] = useState<ReaderSettings>(DEFAULT_SETTINGS);
   const [ttsSettings, setTtsSettings] = useState<TtsSettings>(() =>
     loadTtsSettings()
@@ -2086,6 +2089,7 @@ export default function BookReadPage() {
   const locationsReadyRef = useRef(false);
   const tocItemsRef = useRef<TocItem[]>([]);
   const currentHrefRef = useRef('');
+  const currentChapterRef = useRef('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ttsChunkAudioUrlRef = useRef<Record<number, string>>({});
   const ttsChunkBlobCacheRef = useRef<
@@ -2130,6 +2134,10 @@ export default function BookReadPage() {
   useEffect(() => {
     currentHrefRef.current = currentHref;
   }, [currentHref]);
+
+  useEffect(() => {
+    currentChapterRef.current = currentChapter;
+  }, [currentChapter]);
 
   useEffect(() => {
     ttsSeekingRef.current = ttsSeeking;
@@ -2335,7 +2343,10 @@ export default function BookReadPage() {
         clientHeight: metrics.clientHeight,
         updatedAt: Date.now(),
       });
-      const chapterTitle = lastChapterRef.current || currentChapter || manifest.book.title;
+      // 章节标题走 ref：这个回调挂在阅读器初始化 effect 的依赖里，
+      // 一旦它随当前章节变动，每翻一章都会把整本 EPUB 拆了重开。
+      const chapterTitle =
+        lastChapterRef.current || currentChapterRef.current || manifest.book.title;
       pendingRecordRef.current = {
         sourceId: manifest.book.sourceId,
         sourceName: manifest.book.sourceName,
@@ -2365,7 +2376,7 @@ export default function BookReadPage() {
       };
       pendingRecordDirtyRef.current = true;
     },
-    [currentChapter, manifest]
+    [manifest]
   );
 
   const applyPendingScrolledRestore = useCallback(() => {
@@ -3355,21 +3366,44 @@ export default function BookReadPage() {
     bindScrolledIframeListenerRef.current = bindScrolledIframeListener;
   }, [bindScrolledIframeListener]);
 
+  // 翻到别的章节后，重新按「当前卷摊开」来折叠，上一次的手动开合不再沿用。
+  useEffect(() => {
+    setTocExpandOverrides((prev) =>
+      Object.keys(prev).length === 0 ? prev : {}
+    );
+  }, [currentHref]);
+
   const renderTocItems = useCallback(
     (items: TocItem[], depth = 0) =>
-      items.map((item) => {
+      items.map((item, index) => {
+        const key = `${item.href || item.label}-${depth}-${index}`;
         const active = tocItemIsActive(item, currentHref);
+        const children = item.subitems || [];
+        const expandable = children.length > 0;
+        // 卷默认收起来，只有当前章节所在的那一卷摊开；手动开合过的按手动的来。
+        const expanded = expandable
+          ? tocExpandOverrides[key] ?? active
+          : false;
         const clickable = !!item.href;
         return (
-          <div
-            key={`${item.href || item.label}-${depth}`}
-            className='space-y-2'
-          >
+          <div key={key} className='space-y-2'>
             <button
               ref={(node) => {
-                if (item.href) tocItemRefs.current[item.href] = node;
+                if (!item.href) return;
+                // 折叠会把子项卸载掉，别把已经不在页面上的节点留在表里。
+                if (node) tocItemRefs.current[item.href] = node;
+                else delete tocItemRefs.current[item.href];
               }}
+              type='button'
+              aria-expanded={expandable ? expanded : undefined}
               onClick={() => {
+                if (expandable) {
+                  setTocExpandOverrides((prev) => ({
+                    ...prev,
+                    [key]: !expanded,
+                  }));
+                  return;
+                }
                 if (!clickable) return;
                 persistScrolledPosition();
                 pendingScrolledRestoreRef.current = {
@@ -3383,26 +3417,46 @@ export default function BookReadPage() {
                 void navigateToTarget(item.href);
                 setTocOpen(false);
               }}
-              disabled={!clickable}
-              className={`group relative block w-full rounded-md border px-4 py-3 text-left text-sm transition-colors duration-200 ${
-                active
+              disabled={!expandable && !clickable}
+              className={`group relative flex w-full items-center gap-2 rounded-md border px-4 py-3 text-left text-sm transition-colors duration-200 ${
+                expandable
+                  ? `font-medium ${
+                      active
+                        ? 'border-library-ochre text-library-ochre dark:border-library-night-ochre dark:text-library-night-ochre'
+                        : 'border-library-edge text-library-ink hover:bg-library-ochre-tint dark:border-library-night-edge dark:text-library-night-ink dark:hover:bg-library-night-ochre-tint'
+                    }`
+                  : active
                   ? 'border-library-ochre bg-library-ochre text-white dark:border-library-night-ochre dark:bg-library-night-ochre'
                   : 'border-library-edge text-library-ink hover:bg-library-ochre-tint hover:text-library-ochre dark:border-library-night-edge dark:text-library-night-ink dark:hover:bg-library-night-ochre-tint dark:hover:text-library-night-ochre'
-              } ${!clickable ? 'cursor-default opacity-80' : ''}`}
+              } ${!expandable && !clickable ? 'cursor-default opacity-80' : ''}`}
               style={{ paddingLeft: `${16 + depth * 14}px` }}
             >
-              <span className='block truncate'>{item.label}</span>
+              {expandable ? (
+                <ChevronRight
+                  className={`h-4 w-4 shrink-0 transition-transform duration-200 ${
+                    expanded ? 'rotate-90' : ''
+                  }`}
+                />
+              ) : null}
+              <span className='min-w-0 flex-1 truncate'>{item.label}</span>
               <div className='pointer-events-none absolute bottom-full left-1/2 z-[100] mb-2 -translate-x-1/2 rounded-lg bg-library-ink px-3 py-2 text-sm text-library-paper opacity-0 invisible shadow-xl transition-all duration-200 ease-out group-hover:visible group-hover:opacity-100 dark:bg-library-night-card dark:text-library-night-ink whitespace-nowrap'>
                 <div className='text-sm'>{item.label}</div>
               </div>
             </button>
-            {item.subitems?.length
-              ? renderTocItems(item.subitems, depth + 1)
-              : null}
+            {expandable && expanded ? (
+              <div className='ml-2 space-y-2 border-l border-library-edge pl-2 dark:border-library-night-edge'>
+                {renderTocItems(children, depth + 1)}
+              </div>
+            ) : null}
           </div>
         );
       }),
-    [currentHref, navigateToTarget, persistScrolledPosition]
+    [
+      currentHref,
+      navigateToTarget,
+      persistScrolledPosition,
+      tocExpandOverrides,
+    ]
   );
 
   const showScrolledNextChapter =

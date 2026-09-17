@@ -1,5 +1,6 @@
 'use client';
 
+import { BookX, Compass, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -23,6 +24,7 @@ import { cn } from '@/lib/cn';
 import { bookCardItem } from '@/components/media/adapters';
 import EmptyState from '@/components/media/EmptyState';
 import {
+  LIBRARY_GHOST_BUTTON,
   LIBRARY_SKELETON,
   SPINE_TAB,
   SPINE_TAB_ACTIVE,
@@ -269,6 +271,11 @@ export default function BooksCatalogPage() {
     if (!sourceId) return;
     void loadCatalog(href, false);
   }, [sourceId, href, loadCatalog]);
+
+  // 失败态和空目录态的「重试」都走这里：留在原页重取当前分类，不整页刷新。
+  const retryCatalog = useCallback(() => {
+    void loadCatalog(href, false);
+  }, [href, loadCatalog]);
 
   useEffect(() => {
     const node = loaderRef.current;
@@ -542,7 +549,19 @@ export default function BooksCatalogPage() {
           </Link>
         ))}
       </div>
-      {data || navigationItems.length > 0 || error ? (
+      {/* 没带 sourceId 时以前会一直停在骨架屏上——那是加载态，不是「等参数」态。 */}
+      {!sourceId ? (
+        <EmptyState
+          icon={<Compass className='h-7 w-7' />}
+          title='还没有选择书源'
+          description='从电子书馆挑一个书源，再进它的目录浏览。'
+          action={
+            <Link href='/books' className={LIBRARY_GHOST_BUTTON}>
+              回到电子书馆
+            </Link>
+          }
+        />
+      ) : data || navigationItems.length > 0 || error ? (
         <>
           {navigationItems.length > 0 ? (
             <div
@@ -588,9 +607,41 @@ export default function BooksCatalogPage() {
             </div>
           ) : null}
           {error ? (
-            <EmptyState tone='error' title='目录加载失败' description={error} />
+            <EmptyState
+              tone='error'
+              title='目录加载失败'
+              description={error}
+              action={
+                <button
+                  type='button'
+                  onClick={retryCatalog}
+                  className={LIBRARY_GHOST_BUTTON}
+                >
+                  <RefreshCw className='h-4 w-4' />
+                  重试
+                </button>
+              }
+            />
           ) : loadingCatalog ? (
             <LoadingMoreSkeleton />
+          ) : entries.length === 0 ? (
+            // 请求成功但一本都没有（空分类、分页越界、或是源自己出了问题）：
+            // 以前这里渲染的是空网格，整页只剩顶上两排标签，看着就是白屏。
+            <EmptyState
+              icon={<BookX className='h-7 w-7' />}
+              title='这个分类里没有书'
+              description='换一个分类看看，或重新加载一次。'
+              action={
+                <button
+                  type='button'
+                  onClick={retryCatalog}
+                  className={LIBRARY_GHOST_BUTTON}
+                >
+                  <RefreshCw className='h-4 w-4' />
+                  重新加载
+                </button>
+              }
+            />
           ) : (
             <MediaGrid>
               {entries.map((item) => (
@@ -610,9 +661,9 @@ export default function BooksCatalogPage() {
             <div ref={loaderRef} className='h-8 w-full' />
           ) : null}
         </>
-      ) : !error ? (
+      ) : (
         <CatalogSkeleton />
-      ) : null}
+      )}
     </div>
   );
 }

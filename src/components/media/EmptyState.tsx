@@ -28,11 +28,12 @@ export default function EmptyState({
     return (
       <div
         className={cn(
-          'rounded-md border border-red-300/70 bg-red-50 p-4 text-sm text-red-700 dark:border-red-500/25 dark:bg-red-950/25 dark:text-red-300',
+          'flex flex-wrap items-center justify-between gap-3 rounded-md border border-red-300/70 bg-red-50 p-4 text-sm text-red-700 dark:border-red-500/25 dark:bg-red-950/25 dark:text-red-300',
           className
         )}
       >
-        {description || title}
+        <span className='min-w-0'>{description || title}</span>
+        {action ? <div className='flex flex-wrap gap-3'>{action}</div> : null}
       </div>
     );
   }

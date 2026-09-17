@@ -15,6 +15,14 @@ import {
 } from './library';
 
 /**
+ * 进度可能来自 CFI 比例或章节下标，原样打印是一长串小数；
+ * 小数位保留两位，整数则不加小数点尾巴。
+ */
+function formatProgressLabel(progress: number) {
+  return Number.isInteger(progress) ? String(progress) : progress.toFixed(2);
+}
+
+/**
  * 书签台上摊开的那一本：书库首页顶部的大卡，一眼看到在读的书与进度。
  *
  * 整张卡是一个链接，右侧的「继续阅读」是链接内的视觉按钮（span），
@@ -119,7 +127,7 @@ export default function ContinueReadingCard({
               <span
                 className={cn('shrink-0 text-xs tabular-nums', LIBRARY_MUTED)}
               >
-                {progress}%
+                {formatProgressLabel(progress)}%
               </span>
             </div>
           )}

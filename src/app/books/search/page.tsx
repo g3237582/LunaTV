@@ -67,6 +67,10 @@ export default function BooksSearchPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [hasSearched, setHasSearched] = useState(false);
+  // 已经**执行过**的那次搜索用的书源，用来标注「当前范围」。
+  // 不能直接拿下拉框的值：下拉框是下一次搜索的参数，它一变就改写标注的话，
+  // 标注会和下面那批书对不上（下拉切到 A，展示的还是 B 的结果）。
+  const [executedScope, setExecutedScope] = useState('');
   const [totalSources, setTotalSources] = useState(0);
   const [completedSources, setCompletedSources] = useState(0);
   const [useFluidSearch, setUseFluidSearch] = useState(true);
@@ -216,6 +220,7 @@ export default function BooksSearchPage() {
       setLoading(true);
       setError('');
       setHasSearched(true);
+      setExecutedScope(normalizedSourceId);
       setTotalSources(0);
       setCompletedSources(0);
 
@@ -418,6 +423,7 @@ export default function BooksSearchPage() {
           setSourceId(cachedState.sourceId || '');
           setResult(cachedState.result || EMPTY_RESULT);
           setHasSearched(true);
+          setExecutedScope(cachedState.sourceId || '');
         }
         return;
       }
@@ -431,6 +437,7 @@ export default function BooksSearchPage() {
       setResult(EMPTY_RESULT);
       setLoading(false);
       setHasSearched(false);
+      setExecutedScope('');
       setTotalSources(0);
       setCompletedSources(0);
       setError('');
@@ -465,10 +472,18 @@ export default function BooksSearchPage() {
     }
   };
 
-  const selectedSourceName = useMemo(() => {
-    if (!sourceId) return '全部书源';
-    return sources.find((source) => source.id === sourceId)?.name || '当前书源';
-  }, [sourceId, sources]);
+  // 书源是单选：选了某一个源时「当前范围」就是它本身，后面再缀一个总源数
+  // 只会让人以为这次搜了 2 个源。只有「全部书源」才需要靠数量说明范围多大。
+  const scopeLabel = useMemo(() => {
+    if (executedScope) {
+      return (
+        sources.find((source) => source.id === executedScope)?.name ||
+        '当前书源'
+      );
+    }
+    if (sources.length === 0) return '全部书源';
+    return `全部书源 · ${sources.length} 个书源`;
+  }, [executedScope, sources]);
 
   const searchProgress =
     totalSources > 0
@@ -608,9 +623,7 @@ export default function BooksSearchPage() {
                 }`
               : '等待搜索'
           }
-          subtitle={`当前范围：${selectedSourceName} · ${
-            sources.length || 0
-          } 个书源`}
+          subtitle={hasSearched ? `当前范围：${scopeLabel}` : undefined}
           action={
             loading && useFluidSearch && totalSources > 0 ? (
               <span className={cn('shrink-0 text-xs', LIBRARY_MUTED)}>
