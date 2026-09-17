@@ -1,3 +1,4 @@
+import { hammingHex, MATCH_DISTANCE } from '@/lib/poster-dhash';
 import { SearchResult } from '@/lib/types';
 
 const GENERIC_POSTER_NAMES = new Set([
@@ -57,7 +58,8 @@ const YEAR_MATCH = /(19|20)\d{2}/;
  * a season-qualified title, a distinctive poster file/URL, or the same Douban id.
  */
 export function groupSearchResults(
-  results: SearchResult[]
+  results: SearchResult[],
+  posterHashes: Record<string, string> = {}
 ): [string, SearchResult[]][] {
   if (results.length === 0) {
     return [];
@@ -119,6 +121,8 @@ export function groupSearchResults(
       }
     }
   });
+
+  unionByPosterHashes(results, posterHashes, union);
 
   byTitle.forEach((indices, titleKey) => {
     if (hasSeasonToken(titleKey)) {
@@ -310,6 +314,48 @@ function unionByYear(
   const known = knownYears.length === 1 ? byYear.get(knownYears[0]) : undefined;
   if (known && unknown) {
     union(known[0], unknown[0]);
+  }
+}
+
+function unionByPosterHashes(
+  results: SearchResult[],
+  posterHashes: Record<string, string>,
+  union: (left: number, right: number) => void
+) {
+  const hashKeys = Object.keys(posterHashes);
+  if (hashKeys.length === 0) {
+    return;
+  }
+  const byHash = new Map<string, number[]>();
+  results.forEach((result, index) => {
+    const hash = posterHashes[result.poster.trim()];
+    if (!hash) {
+      return;
+    }
+    const indices = byHash.get(hash);
+    if (indices) {
+      indices.push(index);
+    } else {
+      byHash.set(hash, [index]);
+    }
+  });
+  byHash.forEach((indices) => {
+    for (let offset = 1; offset < indices.length; offset += 1) {
+      union(indices[0], indices[offset]);
+    }
+  });
+  const unique = Array.from(byHash.keys());
+  for (let left = 0; left < unique.length; left += 1) {
+    for (let right = left + 1; right < unique.length; right += 1) {
+      if (hammingHex(unique[left], unique[right]) > MATCH_DISTANCE) {
+        continue;
+      }
+      const leftIndices = byHash.get(unique[left]);
+      const rightIndices = byHash.get(unique[right]);
+      if (leftIndices && rightIndices) {
+        union(leftIndices[0], rightIndices[0]);
+      }
+    }
   }
 }
 

@@ -155,6 +155,50 @@ describe('groupSearchResults', () => {
     expect(grouped).toHaveLength(1);
   });
 
+  it('merges different titles that share a poster dHash', () => {
+    const grouped = groupSearchResults(
+      [
+        result({
+          id: '1',
+          title: '奇迹[电影解说]',
+          poster: 'https://a.example.com/a.jpg',
+        }),
+        result({
+          id: '2',
+          title: '天赐良医【影视解说】',
+          poster: 'https://b.example.com/b.jpg',
+        }),
+      ],
+      {
+        'https://a.example.com/a.jpg': '0123456789abcdef',
+        'https://b.example.com/b.jpg': '0123456789abcdef',
+      }
+    );
+    expect(grouped).toHaveLength(1);
+  });
+
+  it('merges posters whose dHash only differs by a few bits', () => {
+    const grouped = groupSearchResults(
+      [
+        result({
+          id: '1',
+          title: '影片甲',
+          poster: 'https://a.example.com/a.jpg',
+        }),
+        result({
+          id: '2',
+          title: '影片乙',
+          poster: 'https://b.example.com/b.jpg',
+        }),
+      ],
+      {
+        'https://a.example.com/a.jpg': '0000000000000000',
+        'https://b.example.com/b.jpg': '0000000000000001',
+      }
+    );
+    expect(grouped).toHaveLength(1);
+  });
+
   it('keeps a stable key when later hits join an existing group', () => {
     const first = groupSearchResults([
       result({ id: '1', title: '同一部', source: '源A' }),

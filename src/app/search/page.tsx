@@ -30,6 +30,7 @@ import {
   pickGroupDisplay,
 } from '@/lib/search-result-aggregator';
 import { SearchResult } from '@/lib/types';
+import { usePosterHashes } from '@/lib/use-poster-hashes';
 
 import PageLayout from '@/components/PageLayout';
 import SearchPaginationBar from '@/components/SearchPaginationBar';
@@ -205,10 +206,11 @@ function SearchPageClient() {
     return order === 'asc' ? aNum - bNum : bNum - aNum;
   };
 
-  // 聚合后的结果：标题归一化 + 年份、封面指纹、豆瓣 ID
+  // 聚合后的结果：标题归一化 + 年份、封面指纹/感知哈希、豆瓣 ID
+  const posterHashes = usePosterHashes(searchResults);
   const aggregatedResults = useMemo(
-    () => groupSearchResults(searchResults),
-    [searchResults]
+    () => groupSearchResults(searchResults, posterHashes),
+    [searchResults, posterHashes]
   );
 
   // 当聚合结果变化时，如果某个聚合已存在，则调用其卡片 ref 的 set 方法增量更新
