@@ -770,13 +770,45 @@ export default function MusicClient({ children: _children }: { children?: React.
   useEffect(() => {
     const initializePlayState = async () => {
       try {
-        const response = await fetch('/api/music/v2/history');
-        const history = await response.json();
+        const savedPlayState = localStorage.getItem('musicPlayState');
+        const playState = savedPlayState ? JSON.parse(savedPlayState) : {};
+        const selectedQuality = playState.quality || '320k';
+        setCurrentSource(normalizeSource(playState.currentSource));
+        setQuality(selectedQuality);
+        setPlayMode(playState.playMode || 'loop');
+        setVolume(playState.volume || 100);
+
+        const proxyEnabled = getMusicProxyEnabled();
+        setMusicProxyEnabled(proxyEnabled);
+
+        const localSong = playState.currentSong as Song | undefined;
+        if (localSong?.id) {
+          const platform = localSong.platform || playState.currentSource || 'kw';
+          setCurrentSong(localSong);
+          setShowPlayer(true);
+          if (proxyEnabled) {
+            setCurrentSongUrl(buildStreamUrl(localSong, platform, selectedQuality));
+          }
+        }
+
+        const historyPromise = fetch('/api/music/v2/history').then((res) => res.json());
+        const localLyricPromise =
+          localSong?.id && proxyEnabled
+            ? fetchPlayData(localSong, localSong.platform || playState.currentSource || 'kw', selectedQuality, false)
+                .then((data) => {
+                  if (data.success && data.data?.lyric?.lyric) {
+                    setLyrics(parseLyric(data.data.lyric.lyric, data.data.lyric.tlyric));
+                  }
+                })
+                .catch((error) => {
+                  console.error('加载歌词失败:', error);
+                })
+            : Promise.resolve();
+
+        const [history] = await Promise.all([historyPromise, localLyricPromise]);
         const dbRecords = (history.data?.records || []) as DbRecord[];
 
-        const queueRecords = dbRecords;
-
-        const sortedRecords: PlayRecord[] = queueRecords.map((record) => ({
+        const sortedRecords: PlayRecord[] = dbRecords.map((record) => ({
           platform: record.source,
           id: record.songId,
           playTime: record.playProgressSec,
@@ -784,7 +816,7 @@ export default function MusicClient({ children: _children }: { children?: React.
           timestamp: record.createdAt || record.lastPlayedAt || 0,
         }));
 
-        const sortedSongs: Song[] = queueRecords.map((record) => ({
+        const sortedSongs: Song[] = dbRecords.map((record) => ({
           id: record.songId,
           name: record.name,
           artist: record.artist,
@@ -796,46 +828,28 @@ export default function MusicClient({ children: _children }: { children?: React.
           songmid: record.songmid,
         }));
 
-        // 2. 更新播放列表
         if (sortedRecords.length > 0) {
           setPlayRecords(sortedRecords);
           setPlaylist(sortedSongs);
         }
 
-        // 3. 获取 localStorage 配置（只获取配置，不获取歌曲信息）
-        const savedPlayState = localStorage.getItem('musicPlayState');
-        const playState = savedPlayState ? JSON.parse(savedPlayState) : {};
-
-        // 恢复配置状态（不包括歌曲）
-        setCurrentSource(normalizeSource(playState.currentSource));
-        setQuality(playState.quality || '320k');
-        setPlayMode(playState.playMode || 'loop');
-        setVolume(playState.volume || 100);
-
-        // 4. 使用数据库的最新记录（歌曲和进度都从数据库获取）
         if (sortedRecords.length > 0) {
-          const proxyEnabled = getMusicProxyEnabled();
-          setMusicProxyEnabled(proxyEnabled);
-          const latestIndex = queueRecords.reduce((bestIndex, record, index) => {
+          const latestIndex = dbRecords.reduce((bestIndex, record, index) => {
             if (bestIndex < 0) return index;
-            return (record.lastPlayedAt || 0) > (queueRecords[bestIndex].lastPlayedAt || 0) ? index : bestIndex;
+            return (record.lastPlayedAt || 0) > (dbRecords[bestIndex].lastPlayedAt || 0) ? index : bestIndex;
           }, -1);
           const activeIndex = latestIndex >= 0 ? latestIndex : 0;
           const latestDbRecord = sortedRecords[activeIndex];
           const latestDbSong = sortedSongs[activeIndex];
 
-          // 使用数据库的歌曲信息
           setCurrentSong(latestDbSong);
           setPlaylistIndex(activeIndex);
           setShowPlayer(true);
 
-          // 从数据库恢复播放进度
           const dbPlayTime = latestDbRecord.playTime || 0;
           songStartTimeRef.current = Date.now();
 
           const platform = latestDbSong.platform || 'kw';
-          const selectedQuality = playState.quality || '320k';
-
           const restoreTime = () => {
             if (audioRef.current && dbPlayTime > 0) {
               audioRef.current.currentTime = dbPlayTime;
@@ -845,24 +859,24 @@ export default function MusicClient({ children: _children }: { children?: React.
           if (proxyEnabled) {
             const streamUrl = buildStreamUrl(latestDbSong, platform, selectedQuality);
             setCurrentSongUrl(streamUrl);
+            restoredTimeRef.current = dbPlayTime;
 
-            if (audioRef.current) {
-              setIsBuffering(true);
-              audioRef.current.src = streamUrl;
+            if (audioRef.current && dbPlayTime > 0) {
               audioRef.current.addEventListener('loadedmetadata', restoreTime, { once: true });
-              audioRef.current.load();
             }
 
-            fetchPlayData(latestDbSong, platform, selectedQuality, false)
-              .then((data) => {
-                if (data.success && data.data?.lyric?.lyric) {
-                  const parsedLyrics = parseLyric(data.data.lyric.lyric, data.data.lyric.tlyric);
-                  setLyrics(parsedLyrics);
-                }
-              })
-              .catch((error) => {
-                console.error('加载歌词失败:', error);
-              });
+            const sameAsLocal = Boolean(localSong?.id && localSong.id === latestDbSong.id && localSong.platform === latestDbSong.platform);
+            if (!sameAsLocal) {
+              fetchPlayData(latestDbSong, platform, selectedQuality, false)
+                .then((data) => {
+                  if (data.success && data.data?.lyric?.lyric) {
+                    setLyrics(parseLyric(data.data.lyric.lyric, data.data.lyric.tlyric));
+                  }
+                })
+                .catch((error) => {
+                  console.error('加载歌词失败:', error);
+                });
+            }
           } else {
             const data = await fetchPlayData(latestDbSong, platform, selectedQuality, true);
             if (data.success && data.data?.play?.directUrl && audioRef.current) {
@@ -873,8 +887,7 @@ export default function MusicClient({ children: _children }: { children?: React.
               audioRef.current.load();
 
               if (data.data.lyric?.lyric) {
-                const parsedLyrics = parseLyric(data.data.lyric.lyric, data.data.lyric.tlyric);
-                setLyrics(parsedLyrics);
+                setLyrics(parseLyric(data.data.lyric.lyric, data.data.lyric.tlyric));
               }
             }
           }
@@ -1255,6 +1268,9 @@ export default function MusicClient({ children: _children }: { children?: React.
         }
       } else {
         setIsBuffering(true);
+        if (currentSongUrl && !audioRef.current.currentSrc) {
+          audioRef.current.src = currentSongUrl;
+        }
         audioRef.current.play().catch(err => {
           console.error('播放失败:', err);
           setIsBuffering(false);

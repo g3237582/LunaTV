@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { MUSIC_DISCOVERY_TIMEOUT_MS } from '@/lib/music-discovery';
 import { isMusicSource, lxGetJson } from '@/lib/music-v2';
 import { badRequest, internalError } from '@/lib/music-v2-api';
 
@@ -11,7 +12,11 @@ export async function GET(request: NextRequest) {
     const source = searchParams.get('source') || 'wy';
     if (!isMusicSource(source)) return badRequest('不支持的音源');
 
-    const payload = await lxGetJson<any>(`/api/music/songList/tags?source=${source}`, 'none');
+    const payload = await lxGetJson<any>(
+      `/api/music/songList/tags?source=${source}`,
+      'none',
+      MUSIC_DISCOVERY_TIMEOUT_MS
+    );
 
     return NextResponse.json({
       success: true,

@@ -15,6 +15,7 @@ import {
 } from 'react';
 
 import { BookCatalogResult, BookListItem, BookSource } from '@/lib/book.types';
+import { BOOK_SOURCE_CHIP_LIMIT } from '@/lib/book-source-summary';
 import { isCatalogChromeRel } from '@/lib/opds-entry';
 import {
   buildBookDetailPath,
@@ -84,6 +85,8 @@ export default function BooksCatalogPage() {
   const sourceId = searchParams.get('sourceId') || '';
   const href = searchParams.get('href') || '';
   const [sources, setSources] = useState<BookSource[]>([]);
+  const [sourceQuery, setSourceQuery] = useState('');
+  const [debouncedSourceQuery, setDebouncedSourceQuery] = useState('');
   const [selectedSourceId, setSelectedSourceId] = useState(sourceId);
   const [selectedHref, setSelectedHref] = useState(href);
   const [data, setData] = useState<BookCatalogResult | null>(null);
@@ -127,10 +130,26 @@ export default function BooksCatalogPage() {
   }, []);
 
   useEffect(() => {
-    fetch('/api/books/sources')
+    const timer = window.setTimeout(
+      () => setDebouncedSourceQuery(sourceQuery),
+      200
+    );
+    return () => window.clearTimeout(timer);
+  }, [sourceQuery]);
+
+  useEffect(() => {
+    const params = new URLSearchParams({
+      pageSize: String(BOOK_SOURCE_CHIP_LIMIT),
+    });
+    if (debouncedSourceQuery.trim()) params.set('q', debouncedSourceQuery.trim());
+    if (sourceId) params.set('includeId', sourceId);
+    const controller = new AbortController();
+    fetch(`/api/books/sources?${params.toString()}`, { signal: controller.signal })
       .then((res) => res.json())
-      .then((json) => setSources(json.sources || []));
-  }, []);
+      .then((json) => setSources(json.sources || []))
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [debouncedSourceQuery, sourceId]);
 
   useEffect(() => {
     setSelectedSourceId(sourceId);
@@ -506,6 +525,15 @@ export default function BooksCatalogPage() {
 
   return (
     <div className='space-y-4'>
+      <label className='block px-1'>
+        <span className='sr-only'>筛选书源</span>
+        <input
+          value={sourceQuery}
+          onChange={(event) => setSourceQuery(event.target.value)}
+          placeholder='筛选书源'
+          className='h-10 w-full rounded-2xl border border-emerald-100 bg-white px-4 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/20 dark:border-emerald-500/10 dark:bg-gray-900 dark:text-white'
+        />
+      </label>
       <div
         ref={sourceScrollerRef}
         className='flex flex-nowrap gap-2 overflow-x-auto px-1 pb-1.5 pt-2 cursor-grab select-none touch-pan-x active:cursor-grabbing'

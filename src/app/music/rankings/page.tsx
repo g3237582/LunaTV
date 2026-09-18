@@ -3,36 +3,76 @@
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import MusicLoadingIndicator from '@/components/music/MusicLoadingIndicator';
+import MusicPaginationBar from '@/components/music/MusicPaginationBar';
+import { parsePageParam, sliceMusicPage, withPageQuery } from '@/lib/music-page-data';
 import { musicSources, normalizeSource } from '@/lib/music/shared';
 import type { Playlist } from '@/lib/music/types';
+
+const BOARDS_CACHE_TTL = 10 * 60 * 1000;
+
+function readBoardsCache(source: string): Playlist[] | null {
+  try {
+    const raw = localStorage.getItem(`music_boards_${source}`);
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    if (Date.now() - Number(cached.timestamp || 0) > BOARDS_CACHE_TTL) return null;
+    return Array.isArray(cached.data) ? cached.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeBoardsCache(source: string, data: Playlist[]) {
+  try {
+    localStorage.setItem(`music_boards_${source}`, JSON.stringify({ data, timestamp: Date.now() }));
+  } catch {
+    // ignore quota
+  }
+}
+
+function mapBoards(data: any, fallbackSource: string): Playlist[] {
+  return (data?.data?.list || []).map((item: any) => ({
+    id: item.id,
+    name: item.name,
+    source: normalizeSource(item.source || data?.data?.source || fallbackSource),
+    updateFrequency: item.updateFrequency || item.description || '',
+  }));
+}
 
 export default function MusicRankingsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const page = parsePageParam(searchParams.get('page'));
   const [currentSource, setCurrentSource] = useState(normalizeSource(searchParams.get('source')));
   const [showSourceMenu, setShowSourceMenu] = useState(false);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [loading, setLoading] = useState(false);
+  const paged = sliceMusicPage(playlists, page);
 
   useEffect(() => {
     const source = normalizeSource(searchParams.get('source'));
     setCurrentSource(source);
-    setLoading(true);
+    const cached = readBoardsCache(source);
+    if (cached?.length) {
+      setPlaylists(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     fetch(`/api/music/v2/discovery/boards?source=${source}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
-          setPlaylists((data.data?.list || []).map((item: any) => ({
-            id: item.id,
-            name: item.name,
-            source: normalizeSource(item.source || data.data?.source || source),
-            updateFrequency: item.updateFrequency || item.description || '',
-          })));
-        } else {
+          const next = mapBoards(data, source);
+          setPlaylists(next);
+          writeBoardsCache(source, next);
+        } else if (!cached?.length) {
           setPlaylists([]);
         }
       })
-      .catch(() => setPlaylists([]))
+      .catch(() => {
+        if (!cached?.length) setPlaylists([]);
+      })
       .finally(() => setLoading(false));
   }, [searchParams]);
 
@@ -97,7 +137,7 @@ export default function MusicRankingsPage() {
       </div>
       {loading ? <MusicLoadingIndicator className="py-12" /> : playlists.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {playlists.map((playlist, index) => (
+          {paged.items.map((playlist, index) => (
             <button
               key={playlist.id}
               onClick={() => router.push(`/music/rankings/${playlist.source || currentSource}/${encodeURIComponent(playlist.id)}?name=${encodeURIComponent(playlist.name)}`)}
@@ -106,7 +146,7 @@ export default function MusicRankingsPage() {
               <div className="absolute top-0 right-0 -mt-2 -mr-2 w-16 h-16 bg-white/5 rounded-full blur-xl group-hover:bg-green-500/20 transition-colors duration-500"></div>
               <div className="flex items-center gap-4 relative z-10">
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/5 text-lg font-bold text-zinc-400 font-mono shadow-inner group-hover:bg-green-500/20 group-hover:text-green-500 transition-colors">
-                  {String(index + 1).padStart(2, '0')}
+                  {String(paged.startIndex + index + 1).padStart(2, '0')}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-base font-semibold text-white/90 truncate group-hover:text-white transition-colors">{playlist.name}</div>
@@ -137,6 +177,11 @@ export default function MusicRankingsPage() {
           <div className="text-sm text-zinc-500">当前音源暂无排行榜数据</div>
         </div>
       )}
+      <MusicPaginationBar
+        totalItems={playlists.length}
+        page={paged.page}
+        onPageChanged={(next) => router.push(withPageQuery(`/music/rankings?source=${currentSource}`, next))}
+      />
     </div>
   );
 }

@@ -19,6 +19,7 @@ import {
 } from 'react';
 
 import { BookListItem, BookSearchResult, BookSource } from '@/lib/book.types';
+import { BOOK_SOURCE_CHIP_LIMIT } from '@/lib/book-source-summary';
 import {
   buildBookDetailPath,
   cacheBookListItem,
@@ -62,6 +63,8 @@ export default function BooksSearchPage() {
   const [q, setQ] = useState(urlQuery);
   const [sourceId, setSourceId] = useState(urlSourceId);
   const [sources, setSources] = useState<BookSource[]>([]);
+  const [sourceQuery, setSourceQuery] = useState('');
+  const [debouncedSourceQuery, setDebouncedSourceQuery] = useState('');
   const [result, setResult] = useState<BookSearchResult>(EMPTY_RESULT);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -393,16 +396,34 @@ export default function BooksSearchPage() {
   );
 
   useEffect(() => {
+    const timer = window.setTimeout(
+      () => setDebouncedSourceQuery(sourceQuery),
+      200
+    );
+    return () => window.clearTimeout(timer);
+  }, [sourceQuery]);
+
+  useEffect(() => {
     setUseFluidSearch(readFluidSearchSetting());
-    fetch('/api/books/sources')
-      .then((res) => res.json())
-      .then((json) => setSources(json.sources || []))
-      .catch(() => undefined);
     return () => {
       closeEventSource();
       clearPendingResults();
     };
   }, [clearPendingResults, closeEventSource, readFluidSearchSetting]);
+
+  useEffect(() => {
+    const params = new URLSearchParams({
+      pageSize: String(BOOK_SOURCE_CHIP_LIMIT),
+    });
+    if (debouncedSourceQuery.trim()) params.set('q', debouncedSourceQuery.trim());
+    if (sourceId) params.set('includeId', sourceId);
+    const controller = new AbortController();
+    fetch(`/api/books/sources?${params.toString()}`, { signal: controller.signal })
+      .then((res) => res.json())
+      .then((json) => setSources(json.sources || []))
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [debouncedSourceQuery, sourceId]);
 
   useEffect(() => {
     const keyword = urlQuery;
@@ -553,6 +574,12 @@ export default function BooksSearchPage() {
                   <span className='mb-2 block px-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-200'>
                     书源
                   </span>
+                  <input
+                    value={sourceQuery}
+                    onChange={(e) => setSourceQuery(e.target.value)}
+                    placeholder='筛选书源'
+                    className='mb-2 h-10 w-full rounded-2xl border border-emerald-100 bg-white px-4 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/20 dark:border-emerald-500/10 dark:bg-gray-900 dark:text-white'
+                  />
                   <select
                     value={sourceId}
                     onChange={(e) => setSourceId(e.target.value)}

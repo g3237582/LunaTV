@@ -22,6 +22,7 @@ import {
   LegadoRuleSearch,
 } from './book.types';
 import { applyLegadoPageRule } from './legado-page-rule';
+import { getCurrentSiteId } from './site-context';
 import { validateProxyUrlServerSide } from './server/ssrf';
 import { legadoSubscriptionStore } from './legado/subscription-store';
 
@@ -35,6 +36,10 @@ const DEFAULT_TIMEOUT_MS = Number(process.env.LEGADO_TIMEOUT_MS || process.env.O
 const MAX_TEXT_BYTES = Number(process.env.LEGADO_MAX_TEXT_BYTES || 3 * 1024 * 1024);
 const DEFAULT_LEGADO_SEARCH_PAGES = Number(process.env.LEGADO_SEARCH_PAGES || 5);
 const textCache = new Map<string, { expiresAt: number; data: string }>();
+const legadoConfigCache = new Map<
+  string,
+  { fingerprint: string; expiresAt: number; data: ResolvedLegadoConfig }
+>();
 const searchCache = new Map<string, { expiresAt: number; data: BookListItem[] }>();
 const detailCache = new Map<string, { expiresAt: number; data: BookDetail }>();
 const tocCache = new Map<string, { expiresAt: number; data: BookChapter[] }>();
@@ -1069,10 +1074,25 @@ function proxyChapterImages(content: string, source: BookSource) {
   });
 }
 
+function legadoConfigFingerprint(
+  enabled: boolean,
+  envSourceCount: number,
+  subscriptions: Array<{ id?: string; sourceCount?: number; lastSyncAt?: number }>
+) {
+  return [
+    enabled ? '1' : '0',
+    String(envSourceCount),
+    subscriptions
+      .map((item) => `${item.id || ''}:${item.sourceCount || 0}:${item.lastSyncAt || 0}`)
+      .join(','),
+  ].join('|');
+}
+
 async function resolveLegadoConfig(): Promise<ResolvedLegadoConfig> {
   let enabled = process.env.OPDS_ENABLED === 'true' || process.env.LEGADO_ENABLED === 'true';
   let sources: BookSource[] = [];
   const cacheTTL = Number(process.env.LEGADO_CACHE_TTL_MS || process.env.OPDS_CACHE_TTL_MS || 10 * 60 * 1000);
+  const siteId = getCurrentSiteId();
 
   const envJson = process.env.LEGADO_SOURCES_JSON;
   if (envJson) {
@@ -1086,12 +1106,37 @@ async function resolveLegadoConfig(): Promise<ResolvedLegadoConfig> {
     const config = await getConfig();
     if (config.OPDSConfig) {
       enabled = config.OPDSConfig.Enabled ?? enabled;
-      const subscriptionSources = await legadoSubscriptionStore.getSourcesForSubscriptions(config.OPDSConfig.LegadoSubscriptions || []);
+      const subscriptions = config.OPDSConfig.LegadoSubscriptions || [];
+      const fingerprint = legadoConfigFingerprint(enabled, sources.length, subscriptions);
+      const cached = legadoConfigCache.get(siteId);
+      if (cached && cached.fingerprint === fingerprint && cached.expiresAt > Date.now()) {
+        return cached.data;
+      }
+      const subscriptionSources = await legadoSubscriptionStore.getSourcesForSubscriptions(subscriptions);
       sources = [...sources, ...subscriptionSources];
+      const data: ResolvedLegadoConfig = {
+        enabled,
+        cacheTTL,
+        sources: sources
+          .filter((source) => !!source.url && source.enabled !== false)
+          .map(withListingCapabilities),
+      };
+      legadoConfigCache.set(siteId, {
+        fingerprint,
+        expiresAt: Date.now() + cacheTTL,
+        data,
+      });
+      return data;
     }
   } catch {}
 
-  return { enabled, cacheTTL, sources: sources.filter((source) => !!source.url && source.enabled !== false) };
+  return {
+    enabled,
+    cacheTTL,
+    sources: sources
+      .filter((source) => !!source.url && source.enabled !== false)
+      .map(withListingCapabilities),
+  };
 }
 
 export function normalizeImportedSources(input: unknown): BookSource[] {
@@ -1302,6 +1347,21 @@ function hasExplore(rule: LegadoBookSourceRule) {
   return rule.enabledExplore !== false && (isJsRuleString(rule.exploreUrl) || parseExploreUrl(rule.exploreUrl).length > 0) && !!getEffectiveExploreRule(rule);
 }
 
+function withListingCapabilities(source: BookSource): BookSource {
+  const resolved = resolveLegadoSource(source);
+  return {
+    ...resolved,
+    capabilities: {
+      searchSupported: !!resolved.legado?.searchUrl,
+      catalogSupported: hasExplore(resolved.legado || {}),
+      searchMode: resolved.legado?.searchUrl ? 'legado' : 'disabled',
+      catalogMode: hasExplore(resolved.legado || {}) ? 'legado' : 'disabled',
+      acquisitionTypes: ['application/x-legado-chapters+json'],
+      lastCheckedAt: Date.now(),
+    },
+  };
+}
+
 function parseExploreUrl(exploreUrl?: string): Array<{ title: string; template: string }> {
   const raw = (exploreUrl || '').trim();
   if (!raw) return [];
@@ -1376,20 +1436,7 @@ export class LegadoClient {
   async getSources(): Promise<BookSource[]> {
     const config = await resolveLegadoConfig();
     if (!config.enabled) return [];
-    return config.sources.map((source) => {
-      const resolved = resolveLegadoSource(source);
-      return {
-        ...resolved,
-        capabilities: {
-          searchSupported: !!resolved.legado?.searchUrl,
-          catalogSupported: hasExplore(resolved.legado || {}),
-          searchMode: resolved.legado?.searchUrl ? 'legado' : 'disabled',
-          catalogMode: hasExplore(resolved.legado || {}) ? 'legado' : 'disabled',
-          acquisitionTypes: ['application/x-legado-chapters+json'],
-          lastCheckedAt: Date.now(),
-        },
-      };
-    });
+    return config.sources;
   }
 
   async getSearchSources(sourceId?: string): Promise<BookSource[]> {

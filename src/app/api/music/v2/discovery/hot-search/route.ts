@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { firstAvailableSourceList, MUSIC_DISCOVERY_TIMEOUT_MS } from '@/lib/music-discovery';
 import { isMusicSource, lxGetJson } from '@/lib/music-v2';
 import { badRequest, internalError } from '@/lib/music-v2-api';
 
@@ -38,24 +39,24 @@ export async function GET(request: NextRequest) {
     const source = searchParams.get('source') || 'mg';
     if (!isMusicSource(source)) return badRequest('不支持的音源');
 
-    const fallbackSources = [source, 'mg', 'kw', 'tx', 'wy', 'kg'].filter((item, index, arr) => arr.indexOf(item) === index);
-    let list: HotSearchItem[] = [];
-
-    for (const candidate of fallbackSources) {
-      try {
-        const payload = await lxGetJson<LxHotSearchPayload>(`/api/music/hotSearch?source=${candidate}`, 'none');
-        list = normalizeHotSearchPayload(payload, candidate);
-        if (list.length > 0) break;
-      } catch {
-        continue;
-      }
-    }
+    const result = await firstAvailableSourceList<HotSearchItem>({
+      sources: [source, 'mg', 'kw', 'tx', 'wy', 'kg'],
+      load: async (candidate) => {
+        const payload = await lxGetJson<LxHotSearchPayload>(
+          `/api/music/hotSearch?source=${candidate}`,
+          'none',
+          MUSIC_DISCOVERY_TIMEOUT_MS
+        );
+        return normalizeHotSearchPayload(payload, candidate);
+      },
+      unwrap: (payload) => (Array.isArray(payload) ? payload : []),
+    });
 
     return NextResponse.json(
       {
         success: true,
         data: {
-          list,
+          list: result.list,
         },
       },
       {

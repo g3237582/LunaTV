@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { MUSIC_DISCOVERY_TIMEOUT_MS } from '@/lib/music-discovery';
 import { isMusicSource, lxGetJson, normalizeLxSong, unwrapLxArray } from '@/lib/music-v2';
 import { badRequest, internalError } from '@/lib/music-v2-api';
 
@@ -15,7 +16,11 @@ export async function GET(request: NextRequest) {
     if (!isMusicSource(source)) return badRequest('不支持的音源');
     if (!boardId) return badRequest('缺少榜单 ID');
 
-    const payload = await lxGetJson<any>(`/api/music/leaderboard/list?source=${source}&bangid=${encodeURIComponent(boardId)}&page=${page}`, 'none');
+    const payload = await lxGetJson<any>(
+      `/api/music/leaderboard/list?source=${source}&bangid=${encodeURIComponent(boardId)}&page=${page}`,
+      'none',
+      MUSIC_DISCOVERY_TIMEOUT_MS
+    );
     const list = unwrapLxArray<any>(payload);
     const total =
       payload?.total ??

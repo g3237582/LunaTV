@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { MUSIC_DISCOVERY_TIMEOUT_MS } from '@/lib/music-discovery';
 import { isMusicSource, lxGetJson, LxServerSong, normalizeLxSong, unwrapLxArray } from '@/lib/music-v2';
 import { badRequest, internalError } from '@/lib/music-v2-api';
 
@@ -15,7 +16,11 @@ export async function GET(request: NextRequest) {
     if (!id) return badRequest('缺少歌手 ID');
     if (!isMusicSource(source)) return badRequest('不支持的音源');
 
-    const payload = await lxGetJson<any>(`/api/music/artistSongs?id=${encodeURIComponent(id)}&source=${source}&order=${encodeURIComponent(order)}`, 'none');
+    const payload = await lxGetJson<any>(
+      `/api/music/artistSongs?id=${encodeURIComponent(id)}&source=${source}&order=${encodeURIComponent(order)}`,
+      'none',
+      MUSIC_DISCOVERY_TIMEOUT_MS
+    );
     const list = unwrapLxArray<LxServerSong>(payload);
 
     return NextResponse.json({

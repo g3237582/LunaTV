@@ -31,28 +31,28 @@ function SongCover({ song }: { song: Song }) {
   );
 }
 
-export default function SongList({ songs }: { songs: Song[] }) {
+export default function SongList({ songs, startIndex = 0 }: { songs: Song[]; startIndex?: number }) {
   return (
     <div className="space-y-1">
       {songs.map((song, index) => (
         <div
-          key={`${song.platform}-${song.id}-${index}`}
+          key={`${song.platform}-${song.id}-${startIndex + index}`}
           className="grid grid-cols-[32px_44px_1fr_auto_auto] md:grid-cols-[44px_48px_2fr_1fr_auto_auto] items-center gap-2 px-3 py-3 rounded-lg cursor-pointer transition-all hover:bg-white/5"
         >
-          <div className="text-center text-zinc-500 dark:text-zinc-300 text-sm" onClick={() => playMusicSong(song, index)}>
-            {index + 1}
+          <div className="text-center text-zinc-500 dark:text-zinc-300 text-sm" onClick={() => playMusicSong(song, startIndex + index)}>
+            {startIndex + index + 1}
           </div>
-          <div onClick={() => playMusicSong(song, index)}>
+          <div onClick={() => playMusicSong(song, startIndex + index)}>
             <SongCover song={song} />
           </div>
-          <div className="min-w-0" onClick={() => playMusicSong(song, index)}>
+          <div className="min-w-0" onClick={() => playMusicSong(song, startIndex + index)}>
             <div className="text-sm font-medium text-white truncate">{song.name}</div>
             <div className="text-xs text-zinc-500 truncate md:hidden">{song.artist}</div>
           </div>
-          <div className="hidden md:block text-sm text-zinc-400 truncate" onClick={() => playMusicSong(song, index)}>
+          <div className="hidden md:block text-sm text-zinc-400 truncate" onClick={() => playMusicSong(song, startIndex + index)}>
             {song.artist}
           </div>
-          <div className="flex items-center" onClick={() => playMusicSong(song, index)}>
+          <div className="flex items-center" onClick={() => playMusicSong(song, startIndex + index)}>
             <SourcePill source={song.platform} />
           </div>
           <div className="flex flex-col items-center justify-center gap-0.5 leading-none">

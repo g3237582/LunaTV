@@ -2,6 +2,10 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import {
+  resolveClientFeatureFlags,
+  resolveClientFeatureFlagsFromEnv,
+} from '@/lib/client-feature-flags';
 import { getConfig } from '@/lib/config';
 import { getCurrentSite } from '@/lib/site-context';
 import { CURRENT_VERSION } from '@/lib/version';
@@ -49,6 +53,7 @@ export async function GET(request: NextRequest) {
       DanmakuAutoLoadDefault: true,
       EnableTelegramLogin: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_USERNAME && process.env.TELEGRAM_LOGIN_ENABLED !== 'false'),
       TelegramBotUsername: process.env.TELEGRAM_BOT_USERNAME || '',
+      ...resolveClientFeatureFlagsFromEnv(),
       ...siteFields,
     });
   }
@@ -91,6 +96,12 @@ export async function GET(request: NextRequest) {
     AIEnablePlayPageEntry: config.AIConfig?.EnablePlayPageEntry || false,
     AIDefaultMessageNoVideo: config.AIConfig?.DefaultMessageNoVideo || '',
     AIDefaultMessageWithVideo: config.AIConfig?.DefaultMessageWithVideo || '',
+    ...resolveClientFeatureFlags({
+      musicEnabled: config.MusicConfig?.Enabled,
+      suwayomiEnabled: config.SuwayomiConfig?.Enabled,
+      suwayomiServerUrl: config.SuwayomiConfig?.ServerURL,
+      booksEnabled: config.OPDSConfig?.Enabled,
+    }),
     ...siteFields,
   };
   return NextResponse.json(result);

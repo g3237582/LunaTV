@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import MusicLoadingIndicator from '@/components/music/MusicLoadingIndicator';
+import MusicPaginationBar from '@/components/music/MusicPaginationBar';
+import { loadInParallel, MUSIC_LIST_PAGE_SIZE, nextPrefetchPages, parsePageParam } from '@/lib/music-page-data';
 import { musicSources, normalizeSource } from '@/lib/music/shared';
 
 interface SongListItem {
@@ -60,7 +62,7 @@ export default function MusicSongListsPage() {
   const source = normalizeSource(searchParams.get('source'));
   const tagId = searchParams.get('tagId') || '';
   const sortId = searchParams.get('sortId') || 'hot';
-  const page = Number(searchParams.get('page') || '1');
+  const page = parsePageParam(searchParams.get('page'));
 
   const [showSourceMenu, setShowSourceMenu] = useState(false);
   const [showTagMenu, setShowTagMenu] = useState(false);
@@ -70,6 +72,7 @@ export default function MusicSongListsPage() {
   const [loadingTags, setLoadingTags] = useState(false);
   const [loadingList, setLoadingList] = useState(false);
   const [total, setTotal] = useState(0);
+  const [pageSize, setPageSize] = useState(MUSIC_LIST_PAGE_SIZE);
   const [activeTagLabel, setActiveTagLabel] = useState(tagId);
   const [activeSource, setActiveSource] = useState(source);
   const [activeSortId, setActiveSortId] = useState(sortId);
@@ -108,71 +111,83 @@ export default function MusicSongListsPage() {
   }, [sortId]);
 
   useEffect(() => {
-    const cacheKey = `music_songlist_tags_${source}`;
-    const cached = readCache<{ groups: SongListGroup[]; hotTags: SongListTag[] }>(cacheKey);
-    setLoadingTags(true);
-    if (cached) {
-      setGroups(cached.groups || []);
-      setHotTags(cached.hotTags || []);
+    const tagsKey = `music_songlist_tags_${source}`;
+    const listKey = `music_songlists_${source}_${tagId}_${sortId}_${page}`;
+    const cachedTags = readCache<{ groups: SongListGroup[]; hotTags: SongListTag[] }>(tagsKey);
+    const cachedList = readCache<{ list: SongListItem[]; total: number }>(listKey);
+    if (cachedTags) {
+      setGroups(cachedTags.groups || []);
+      setHotTags(cachedTags.hotTags || []);
+    } else {
+      setLoadingTags(true);
+    }
+    if (cachedList) {
+      setSongLists(cachedList.list || []);
+      setTotal(cachedList.total || 0);
+      setLoadingList(false);
+    } else {
+      setLoadingList(true);
     }
 
-    fetch(`/api/music/v2/discovery/songlist-tags?source=${source}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success) {
-          const next = {
-            groups: data.data?.groups || [],
-            hotTags: data.data?.hotTags || [],
-          };
-          setGroups(next.groups);
-          setHotTags(next.hotTags);
-          writeCache(cacheKey, next);
-        } else if (!cached) {
-          setGroups([]);
-          setHotTags([]);
-        }
-      })
-      .catch(() => {
-        if (!cached) {
-          setGroups([]);
-          setHotTags([]);
-        }
-      })
-      .finally(() => setLoadingTags(false));
-  }, [source]);
+    let cancelled = false;
+    void loadInParallel({
+      tags: async () => {
+        const res = await fetch(`/api/music/v2/discovery/songlist-tags?source=${source}`);
+        return res.json();
+      },
+      list: async () => {
+        const res = await fetch(
+          `/api/music/v2/discovery/songlists?source=${source}&tagId=${encodeURIComponent(tagId)}&sortId=${encodeURIComponent(sortId)}&page=${page}`
+        );
+        return res.json();
+      },
+    }).then((result) => {
+      if (cancelled) return;
+      const tagsData = result.tags as { success?: boolean; data?: { groups?: SongListGroup[]; hotTags?: SongListTag[] } } | null;
+      if (tagsData?.success) {
+        const next = {
+          groups: tagsData.data?.groups || [],
+          hotTags: tagsData.data?.hotTags || [],
+        };
+        setGroups(next.groups);
+        setHotTags(next.hotTags);
+        writeCache(tagsKey, next);
+      } else if (!cachedTags) {
+        setGroups([]);
+        setHotTags([]);
+      }
+      setLoadingTags(false);
 
-  useEffect(() => {
-    const cacheKey = `music_songlists_${source}_${tagId}_${sortId}_${page}`;
-    const cached = readCache<{ list: SongListItem[]; total: number }>(cacheKey);
-    setLoadingList(true);
-    if (cached) {
-      setSongLists(cached.list || []);
-      setTotal(cached.total || 0);
-    }
+      const listData = result.list as {
+        success?: boolean;
+        data?: { list?: SongListItem[]; total?: number; limit?: number };
+      } | null;
+      if (listData?.success) {
+        const next = {
+          list: listData.data?.list || [],
+          total: listData.data?.total || 0,
+        };
+        const nextPageSize = Number(listData.data?.limit || next.list.length || MUSIC_LIST_PAGE_SIZE);
+        setSongLists(next.list);
+        setTotal(next.total);
+        setPageSize(nextPageSize);
+        writeCache(listKey, next);
+        const pageCount = Math.max(1, Math.ceil((next.total || 0) / Math.max(nextPageSize, 1)));
+        nextPrefetchPages(page, pageCount).forEach((nextPage) => {
+          void fetch(
+            `/api/music/v2/discovery/songlists?source=${source}&tagId=${encodeURIComponent(tagId)}&sortId=${encodeURIComponent(sortId)}&page=${nextPage}`
+          );
+        });
+      } else if (!cachedList) {
+        setSongLists([]);
+        setTotal(0);
+      }
+      setLoadingList(false);
+    });
 
-    fetch(`/api/music/v2/discovery/songlists?source=${source}&tagId=${encodeURIComponent(tagId)}&sortId=${encodeURIComponent(sortId)}&page=${page}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success) {
-          const next = {
-            list: data.data?.list || [],
-            total: data.data?.total || 0,
-          };
-          setSongLists(next.list);
-          setTotal(next.total);
-          writeCache(cacheKey, next);
-        } else if (!cached) {
-          setSongLists([]);
-          setTotal(0);
-        }
-      })
-      .catch(() => {
-        if (!cached) {
-          setSongLists([]);
-          setTotal(0);
-        }
-      })
-      .finally(() => setLoadingList(false));
+    return () => {
+      cancelled = true;
+    };
   }, [source, tagId, sortId, page]);
 
   const openDetail = (item: SongListItem) => {
@@ -380,24 +395,12 @@ export default function MusicSongListsPage() {
         </div>
       )}
 
-      {total > 0 && (
-        <div className="mt-8 flex items-center justify-center gap-3">
-          <button
-            disabled={page <= 1}
-            onClick={() => updateQuery({ page: page - 1 })}
-            className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-40"
-          >
-            上一页
-          </button>
-          <span className="text-sm text-zinc-500">第 {page} 页</span>
-          <button
-            onClick={() => updateQuery({ page: page + 1 })}
-            className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white"
-          >
-            下一页
-          </button>
-        </div>
-      )}
+      <MusicPaginationBar
+        totalItems={total}
+        page={page}
+        pageSize={pageSize}
+        onPageChanged={(next) => updateQuery({ page: next })}
+      />
     </div>
   );
 }

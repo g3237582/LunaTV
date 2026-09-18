@@ -294,7 +294,12 @@ export async function getMusicV2Config() {
 
 type LxFetchAuthMode = 'auto' | 'required' | 'none';
 
-async function lxFetch(path: string, init: RequestInit = {}, authMode: LxFetchAuthMode = 'auto') {
+async function lxFetch(
+  path: string,
+  init: RequestInit = {},
+  authMode: LxFetchAuthMode = 'auto',
+  timeoutMs = 45000
+) {
   const { enabled, baseUrl, token } = await getMusicV2Config();
 
   if (!enabled) {
@@ -318,15 +323,19 @@ async function lxFetch(path: string, init: RequestInit = {}, authMode: LxFetchAu
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers,
-    signal: AbortSignal.timeout(45000),
+    signal: AbortSignal.timeout(timeoutMs),
     cache: 'no-store',
   });
 
   return response;
 }
 
-export async function lxGetJson<T>(path: string, authMode: LxFetchAuthMode = 'auto'): Promise<T> {
-  const response = await lxFetch(path, {}, authMode);
+export async function lxGetJson<T>(
+  path: string,
+  authMode: LxFetchAuthMode = 'auto',
+  timeoutMs = 45000
+): Promise<T> {
+  const response = await lxFetch(path, {}, authMode, timeoutMs);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `请求失败(${response.status})`);

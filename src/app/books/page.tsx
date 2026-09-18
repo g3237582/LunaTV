@@ -13,6 +13,9 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
 import { BookSource } from '@/lib/book.types';
+import {
+  BOOK_SOURCE_PAGE_SIZE,
+} from '@/lib/book-source-summary';
 
 function BooksHomeSkeleton() {
   return (
@@ -63,6 +66,22 @@ export default function BooksHomePage() {
   const [sources, setSources] = useState<BookSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [allCount, setAllCount] = useState(0);
+  const [catalogCount, setCatalogCount] = useState(0);
+  const [searchCount, setSearchCount] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query), 200);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedQuery]);
 
   useEffect(() => {
     if (
@@ -73,26 +92,41 @@ export default function BooksHomePage() {
       window.location.href = '/';
       return;
     }
-    fetch('/api/books/sources')
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(BOOK_SOURCE_PAGE_SIZE),
+    });
+    if (debouncedQuery.trim()) params.set('q', debouncedQuery.trim());
+    const controller = new AbortController();
+    setLoading(true);
+    fetch(`/api/books/sources?${params.toString()}`, { signal: controller.signal })
       .then((res) => res.json())
-      .then((data) => setSources(data.sources || []))
-      .catch((err) => setError(err.message || '加载书源失败'))
-      .finally(() => setLoading(false));
-  }, []);
+      .then((data) => {
+        setSources(data.sources || []);
+        setTotal(Number(data.total) || 0);
+        setAllCount(Number(data.allCount) || 0);
+        setCatalogCount(Number(data.catalogCount) || 0);
+        setSearchCount(Number(data.searchCount) || 0);
+      })
+      .catch((err) => {
+        if (err?.name === 'AbortError') return;
+        setError(err.message || '加载书源失败');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [debouncedQuery, page]);
+
+  const totalPages = Math.max(1, Math.ceil(total / BOOK_SOURCE_PAGE_SIZE));
 
   const stats = useMemo(() => {
-    const catalogCount = sources.filter(
-      (source) => source.capabilities?.catalogSupported
-    ).length;
-    const searchCount = sources.filter(
-      (source) => source.capabilities?.searchSupported
-    ).length;
     return [
-      { label: '可用书源', value: sources.length },
+      { label: '可用书源', value: allCount },
       { label: '支持目录', value: catalogCount },
       { label: '支持搜索', value: searchCount },
     ];
-  }, [sources]);
+  }, [allCount, catalogCount, searchCount]);
 
   return (
     <div className='space-y-7'>
@@ -149,11 +183,21 @@ export default function BooksHomePage() {
             书源入口
           </h2>
           <p className='mt-1 text-sm text-slate-500 dark:text-slate-400'>
-            选择一个书源开始浏览，或直接进入搜索。
+            搜索书源名称，或直接进入全库搜书。
           </p>
         </div>
         <Library className='hidden h-6 w-6 text-emerald-500 sm:block' />
       </div>
+
+      <label className='block'>
+        <span className='sr-only'>搜索书源</span>
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder='搜索书源名称或分组'
+          className='h-12 w-full rounded-2xl border border-emerald-100 bg-white px-4 text-sm font-medium text-slate-900 outline-none transition-colors duration-200 placeholder:text-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/20 dark:border-emerald-500/10 dark:bg-gray-900 dark:text-white'
+        />
+      </label>
 
       {loading ? <BooksHomeSkeleton /> : null}
       {error ? (
@@ -162,6 +206,8 @@ export default function BooksHomePage() {
         </div>
       ) : null}
 
+      {!loading ? (
+        <>
       <div className='grid gap-4 md:grid-cols-2 xl:grid-cols-3'>
         {sources.map((source) => (
           <article
@@ -218,8 +264,33 @@ export default function BooksHomePage() {
 
       {!loading && !error && sources.length === 0 ? (
         <div className='rounded-3xl border border-dashed border-emerald-200 bg-white/70 p-8 text-center text-sm text-slate-500 dark:border-emerald-500/20 dark:bg-gray-950/50 dark:text-slate-400'>
-          暂无可用书源
+          {query.trim() ? '没有匹配的书源' : '暂无可用书源'}
         </div>
+      ) : null}
+      {total > BOOK_SOURCE_PAGE_SIZE ? (
+        <div className='flex items-center justify-center gap-3 text-sm text-slate-500 dark:text-slate-400'>
+          <button
+            type='button'
+            disabled={page <= 1}
+            onClick={() => setPage((current) => Math.max(1, current - 1))}
+            className='rounded-full border border-emerald-100 px-3 py-1 disabled:opacity-40 dark:border-emerald-500/20'
+          >
+            上一页
+          </button>
+          <span>
+            {page} / {totalPages}
+          </span>
+          <button
+            type='button'
+            disabled={page >= totalPages}
+            onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+            className='rounded-full border border-emerald-100 px-3 py-1 disabled:opacity-40 dark:border-emerald-500/20'
+          >
+            下一页
+          </button>
+        </div>
+      ) : null}
+        </>
       ) : null}
     </div>
   );

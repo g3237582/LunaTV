@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { playMusicList, playMusicSong } from '@/lib/music/actions';
 import MusicLoadingIndicator from '@/components/music/MusicLoadingIndicator';
+import MusicPaginationBar from '@/components/music/MusicPaginationBar';
+import { sliceMusicPage } from '@/lib/music-page-data';
 import { getApiErrorMessage } from '@/lib/music/errors';
 import { mapSong, SourcePill } from '@/lib/music/shared';
 
@@ -14,6 +16,8 @@ export default function MusicMyPlaylistsPage() {
   const [loadingUserPlaylistSongs, setLoadingUserPlaylistSongs] = useState(false);
   const [deletingPlaylistId, setDeletingPlaylistId] = useState<string | null>(null);
   const [removingSongId, setRemovingSongId] = useState<string | null>(null);
+  const [playlistPage, setPlaylistPage] = useState(1);
+  const [songPage, setSongPage] = useState(1);
 
   const loadUserPlaylists = useCallback(() => {
     setLoadingUserPlaylists(true);
@@ -47,6 +51,7 @@ export default function MusicMyPlaylistsPage() {
 
   const selectPlaylist = (playlist: any) => {
     setSelectedUserPlaylist(playlist);
+    setSongPage(1);
     loadUserPlaylistSongs(playlist.id);
   };
 
@@ -101,6 +106,8 @@ export default function MusicMyPlaylistsPage() {
   };
 
   const mappedSongs = userPlaylistSongs.map(normalizePlaylistSong);
+  const pagedPlaylists = sliceMusicPage(userPlaylists, playlistPage);
+  const pagedSongs = sliceMusicPage(mappedSongs, songPage);
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -110,8 +117,9 @@ export default function MusicMyPlaylistsPage() {
           {loadingUserPlaylists ? <MusicLoadingIndicator className="py-8" /> : userPlaylists.length === 0 ? (
             <div className="text-center py-8 text-zinc-400">还没有歌单</div>
           ) : (
+            <>
             <div className="space-y-2">
-              {userPlaylists.map((playlist) => (
+              {pagedPlaylists.items.map((playlist) => (
                 <div key={playlist.id} className={`p-3 rounded-lg cursor-pointer transition-colors ${selectedUserPlaylist?.id === playlist.id ? 'bg-green-600/20 border border-green-500' : 'bg-white/5 hover:bg-white/10'}`} onClick={() => selectPlaylist(playlist)}>
                   <div className="flex items-center gap-3">
                     {playlist.cover ? <img src={playlist.cover} alt={playlist.name} className="w-12 h-12 rounded object-cover" /> : <div className="w-12 h-12 rounded bg-zinc-700" />}
@@ -123,6 +131,12 @@ export default function MusicMyPlaylistsPage() {
                 </div>
               ))}
             </div>
+            <MusicPaginationBar
+              totalItems={userPlaylists.length}
+              page={pagedPlaylists.page}
+              onPageChanged={setPlaylistPage}
+            />
+            </>
           )}
         </div>
       </div>
@@ -147,15 +161,15 @@ export default function MusicMyPlaylistsPage() {
             </div>
             {loadingUserPlaylistSongs ? <MusicLoadingIndicator className="py-8" /> : mappedSongs.length === 0 ? <div className="text-center py-8 text-zinc-400">歌单为空</div> : (
               <div className="space-y-2">
-                {mappedSongs.map((song, index) => (
+                {pagedSongs.items.map((song, index) => (
                   <div key={`${song.platform}+${song.id}`} className="flex items-center gap-2 p-2.5 md:gap-3 md:p-3 rounded-lg bg-white/5 hover:bg-white/10 transition-colors">
-                    <div className="text-zinc-500 dark:text-zinc-300 text-xs md:text-sm w-6 md:w-8 text-center shrink-0">{index + 1}</div>
+                    <div className="text-zinc-500 dark:text-zinc-300 text-xs md:text-sm w-6 md:w-8 text-center shrink-0">{pagedSongs.startIndex + index + 1}</div>
                     {song.pic && <img src={song.pic} alt={song.name} className="w-10 h-10 md:w-12 md:h-12 rounded object-cover shrink-0" />}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 min-w-0"><div className="font-medium truncate">{song.name}</div><SourcePill source={song.platform} /></div>
                       <div className="text-sm text-zinc-400 truncate">{song.artist}</div>
                     </div>
-                    <button onClick={() => playMusicSong(song, index)} className="text-zinc-500 hover:text-green-500 transition-colors p-1 md:p-2 shrink-0" title="播放">▶</button>
+                    <button onClick={() => playMusicSong(song, pagedSongs.startIndex + index)} className="text-zinc-500 hover:text-green-500 transition-colors p-1 md:p-2 shrink-0" title="播放">▶</button>
                     <button
                       onClick={() => removeSongFromUserPlaylist(song)}
                       disabled={removingSongId === song.id}
@@ -166,6 +180,11 @@ export default function MusicMyPlaylistsPage() {
                     </button>
                   </div>
                 ))}
+                <MusicPaginationBar
+                  totalItems={mappedSongs.length}
+                  page={pagedSongs.page}
+                  onPageChanged={setSongPage}
+                />
               </div>
             )}
           </div>

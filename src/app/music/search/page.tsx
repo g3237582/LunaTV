@@ -1,11 +1,19 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Flame, RefreshCw } from 'lucide-react';
 import { playMusicList } from '@/lib/music/actions';
 import MusicLoadingIndicator from '@/components/music/MusicLoadingIndicator';
+import MusicPaginationBar from '@/components/music/MusicPaginationBar';
 import SongList from '@/components/music/SongList';
+import {
+  MUSIC_LIST_PAGE_SIZE,
+  nextPrefetchPages,
+  parsePageParam,
+  sliceMusicPage,
+  withPageQuery,
+} from '@/lib/music-page-data';
 import { mapSong, musicSources, normalizeSource } from '@/lib/music/shared';
 import type { Song } from '@/lib/music/types';
 
@@ -123,6 +131,7 @@ export default function MusicSearchPage() {
   const searchParams = useSearchParams();
   const source = normalizeSource(searchParams.get('source'));
   const q = searchParams.get('q') || '';
+  const page = parsePageParam(searchParams.get('page'));
   const searchType = (['song', 'singer', 'album'].includes(searchParams.get('type') || '')
     ? searchParams.get('type')
     : 'song') as SearchType;
@@ -135,15 +144,11 @@ export default function MusicSearchPage() {
   const [hotSearches, setHotSearches] = useState<HotSearchItem[]>([]);
   const [hotLoading, setHotLoading] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [showSourceMenu, setShowSourceMenu] = useState(false);
   const [showTypeMenu, setShowTypeMenu] = useState(false);
   const [detailTitle, setDetailTitle] = useState('');
-  const loadingMoreRef = useRef(false);
-  const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  const userScrolledRef = useRef(false);
+  const [detailPage, setDetailPage] = useState(1);
 
   const loadHotSearch = async (forceRefresh = false) => {
     const cacheKey = getHotSearchCacheKey(source);
@@ -196,61 +201,50 @@ export default function MusicSearchPage() {
     }
   };
 
-  const loadSearchPage = useCallback(async (pageNum: number, append = false, signal?: AbortSignal) => {
+  const loadSearchPage = useCallback(async (pageNum: number, signal?: AbortSignal) => {
     if (!q) return;
-    if (append) {
-      if (loadingMoreRef.current) return;
-      loadingMoreRef.current = true;
-      setLoadingMore(true);
-    } else {
-      setLoading(true);
-    }
+    setLoading(true);
 
     try {
-      const res = await fetch(`/api/music/v2/search?source=${source}&q=${encodeURIComponent(q)}&type=${searchType}&page=${pageNum}&limit=20`, { signal });
+      const res = await fetch(
+        `/api/music/v2/search?source=${source}&q=${encodeURIComponent(q)}&type=${searchType}&page=${pageNum}&limit=${MUSIC_LIST_PAGE_SIZE}`,
+        { signal }
+      );
       const data = await res.json();
       const list = data.data?.list || [];
       const nextHasMore = Boolean(data.data?.hasMore);
 
       if (searchType === 'singer') {
-        setSingers((prev) => append ? [...prev, ...list] : list);
-        if (!append) {
-          setAlbums([]);
-          setSongs([]);
-        }
+        setSingers(list);
+        setAlbums([]);
+        setSongs([]);
       } else if (searchType === 'album') {
-        setAlbums((prev) => append ? [...prev, ...list] : list);
-        if (!append) {
-          setSingers([]);
-          setSongs([]);
-        }
+        setAlbums(list);
+        setSingers([]);
+        setSongs([]);
       } else {
-        const nextSongs = list.map(mapSong);
-        setSongs((prev) => append ? [...prev, ...nextSongs] : nextSongs);
-        if (!append) {
-          setSingers([]);
-          setAlbums([]);
-        }
+        setSongs(list.map(mapSong));
+        setSingers([]);
+        setAlbums([]);
       }
 
-      setPage(pageNum);
       setHasMore(nextHasMore);
+      if (nextHasMore) {
+        nextPrefetchPages(pageNum, pageNum + 1).forEach((nextPage) => {
+          void fetch(
+            `/api/music/v2/search?source=${source}&q=${encodeURIComponent(q)}&type=${searchType}&page=${nextPage}&limit=${MUSIC_LIST_PAGE_SIZE}`
+          );
+        });
+      }
     } catch (error: any) {
       if (error?.name !== 'AbortError') {
-        if (!append) {
-          setSongs([]);
-          setSingers([]);
-          setAlbums([]);
-          setHasMore(false);
-        }
+        setSongs([]);
+        setSingers([]);
+        setAlbums([]);
+        setHasMore(false);
       }
     } finally {
-      if (append) {
-        loadingMoreRef.current = false;
-        setLoadingMore(false);
-      } else {
-        setLoading(false);
-      }
+      setLoading(false);
     }
   }, [source, q, searchType]);
 
@@ -258,60 +252,23 @@ export default function MusicSearchPage() {
     setSelectedSource(source);
     setSelectedType(searchType);
     setKeyword(q);
-    void loadHotSearch();
+    setDetailPage(1);
 
     if (!q) {
       setSongs([]);
       setSingers([]);
       setAlbums([]);
       setDetailTitle('');
-      setPage(1);
       setHasMore(false);
+      void loadHotSearch();
       return;
     }
+
     const controller = new AbortController();
     setDetailTitle('');
-    setPage(1);
-    void loadSearchPage(1, false, controller.signal);
+    void loadSearchPage(page, controller.signal);
     return () => controller.abort();
-  }, [source, q, searchType, loadSearchPage]);
-
-  useEffect(() => {
-    userScrolledRef.current = false;
-  }, [source, q, searchType]);
-
-  useEffect(() => {
-    if (!q || detailTitle || !hasMore) return;
-    const target = loadMoreRef.current;
-    if (!target) return;
-
-    const markUserScrolled = () => {
-      userScrolledRef.current = true;
-    };
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        if (!entry?.isIntersecting) return;
-        if (!userScrolledRef.current) return;
-        if (loading || loadingMore || loadingMoreRef.current) return;
-        void loadSearchPage(page + 1, true);
-      },
-      { root: null, rootMargin: '0px 0px 80px 0px', threshold: 0.1 }
-    );
-
-    window.addEventListener('wheel', markUserScrolled, { passive: true });
-    window.addEventListener('touchmove', markUserScrolled, { passive: true });
-    window.addEventListener('scroll', markUserScrolled, { passive: true });
-    observer.observe(target);
-
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('wheel', markUserScrolled);
-      window.removeEventListener('touchmove', markUserScrolled);
-      window.removeEventListener('scroll', markUserScrolled);
-    };
-  }, [q, detailTitle, hasMore, loading, loadingMore, page, loadSearchPage]);
+  }, [source, q, searchType, page, loadSearchPage]);
 
   const submit = () => {
     const next = keyword.trim();
@@ -360,6 +317,7 @@ export default function MusicSearchPage() {
     setAlbums([]);
     setSongs([]);
     setHasMore(false);
+    setDetailPage(1);
     setLoading(true);
     try {
       const itemSource = normalizeSource(singer.source || selectedSource);
@@ -380,6 +338,7 @@ export default function MusicSearchPage() {
     setAlbums([]);
     setSongs([]);
     setHasMore(false);
+    setDetailPage(1);
     setLoading(true);
     try {
       const itemSource = normalizeSource(album.source || selectedSource);
@@ -396,8 +355,16 @@ export default function MusicSearchPage() {
 
   const currentSourceLabel = musicSources.find((item) => item.key === selectedSource)?.label || '音源';
   const currentTypeLabel = searchTypeOptions.find((item) => item.key === selectedType)?.label || '歌曲';
-  const resultCount = selectedType === 'song' ? songs.length : selectedType === 'singer' ? singers.length : albums.length;
-  const resultUnit = selectedType === 'song' ? '首结果' : selectedType === 'singer' ? '个歌手' : '张专辑';
+  const detailPaged = sliceMusicPage(songs, detailPage);
+  const searchHref = `/music/search?source=${source}&type=${searchType}${q ? `&q=${encodeURIComponent(q)}` : ''}`;
+  const resultCount = detailTitle
+    ? songs.length
+    : selectedType === 'song'
+      ? songs.length
+      : selectedType === 'singer'
+        ? singers.length
+        : albums.length;
+  const resultUnit = selectedType === 'song' || detailTitle ? '首结果' : selectedType === 'singer' ? '个歌手' : '张专辑';
 
   return (
     <div className="animate-in fade-in duration-500 relative z-10">
@@ -539,11 +506,11 @@ export default function MusicSearchPage() {
         <MusicLoadingIndicator className="py-16" />
       ) : q ? (
         selectedType === 'singer' ? (
-          detailTitle ? <SongList songs={songs} /> : <SingerGrid singers={singers} onOpen={openSinger} />
+          detailTitle ? <SongList songs={detailPaged.items} startIndex={detailPaged.startIndex} /> : <SingerGrid singers={singers} onOpen={openSinger} />
         ) : selectedType === 'album' ? (
-          detailTitle ? <SongList songs={songs} /> : <AlbumGrid albums={albums} onOpen={openAlbum} />
+          detailTitle ? <SongList songs={detailPaged.items} startIndex={detailPaged.startIndex} /> : <AlbumGrid albums={albums} onOpen={openAlbum} />
         ) : (
-          <SongList songs={songs} />
+          <SongList songs={songs} startIndex={(page - 1) * MUSIC_LIST_PAGE_SIZE} />
         )
       ) : (
         <div className="rounded-3xl border border-white/10 bg-white/5 p-4 md:p-6 backdrop-blur-sm">
@@ -591,8 +558,25 @@ export default function MusicSearchPage() {
           </div>
         </div>
       )}
-      {loadingMore && <MusicLoadingIndicator className="py-6" />}
-      {q && !detailTitle && hasMore && <div ref={loadMoreRef} className="h-1" />}
+      {detailTitle ? (
+        <MusicPaginationBar
+          totalItems={songs.length}
+          page={detailPaged.page}
+          onPageChanged={setDetailPage}
+        />
+      ) : q ? (
+        <MusicPaginationBar
+          page={page}
+          hasMore={hasMore}
+          onPageChanged={(next) => router.push(withPageQuery(searchHref, next))}
+        />
+      ) : (
+        <MusicPaginationBar
+          totalItems={hotSearches.length}
+          page={1}
+          onPageChanged={() => undefined}
+        />
+      )}
     </div>
   );
 }
