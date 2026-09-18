@@ -27,16 +27,13 @@ generateManifest();
 // 直接在当前进程中启动 standalone Server（`server.js`）
 require('./server.js');
 
-const hostname = process.env.HOSTNAME || 'localhost';
 const sites = parseIsolatedSites();
 const readySites = new Set();
 
 function siteOrigin(site) {
-  if (site.siteBase) {
-    return site.siteBase.replace(/\/$/, '');
-  }
-  const host = hostname === '0.0.0.0' ? 'localhost' : hostname;
-  return `http://${host}:${site.port}`;
+  // Health/cron must hit this process over HTTP.
+  // Public SITE_BASE may be https:// behind a TLS reverse proxy.
+  return `http://127.0.0.1:${site.port}`;
 }
 
 sites.forEach((site) => {

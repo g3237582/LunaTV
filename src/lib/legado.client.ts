@@ -21,6 +21,7 @@ import {
   LegadoBookSourceRule,
   LegadoRuleSearch,
 } from './book.types';
+import { applyLegadoPageRule } from './legado-page-rule';
 import { validateProxyUrlServerSide } from './server/ssrf';
 import { legadoSubscriptionStore } from './legado/subscription-store';
 
@@ -378,6 +379,7 @@ function buildUrlFromTemplate(template: string, source: BookSource, keyword?: st
     raw = evaluated || raw;
     if (/,(\s*)\{/.test(raw)) return raw;
   }
+  raw = applyLegadoPageRule(raw, page);
   raw = renderTemplateExpressions(raw, keyword || '', page);
   raw = raw
     .replace(/\{searchTerms\}/g, encodeRuleParam(keyword || ''))

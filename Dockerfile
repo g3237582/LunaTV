@@ -17,8 +17,11 @@ FROM node:24-alpine AS builder
 RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /app
 
-# 复制依赖
+# 编译链和 pnpm store 放在 COPY . . 之前，避免改源码时重复下载 gcc。
+RUN apk add --no-cache python3 make g++
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /root/.local/share/pnpm /root/.local/share/pnpm
+
 # 复制全部源代码
 COPY . .
 
@@ -26,12 +29,16 @@ COPY . .
 ENV DOCKER_ENV=true
 # 2GB 机器上限制 Node 堆，避免 next build OOM
 ENV NODE_OPTIONS=--max-old-space-size=1536
+# corepack / pnpm 默认走 npmjs；构建机访问不稳定时改镜像。
+ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
 
 # 生成生产构建
 RUN pnpm run build
 
-# 使用 pnpm deploy 提取生产依赖到独立目录
-RUN pnpm deploy --filter=. --prod --legacy /tmp/prod-deps
+# 使用 pnpm deploy 提取生产依赖到独立目录。
+# 即使有 store，deploy 仍会向 registry 补元数据；npmjs 在构建机上不稳定，改走镜像。
+RUN pnpm config set registry https://registry.npmmirror.com \
+  && pnpm deploy --filter=. --prod --legacy --prefer-offline /tmp/prod-deps
 
 # ---- 第 3 阶段：生成运行时镜像 ----
 FROM node:24-alpine AS runner

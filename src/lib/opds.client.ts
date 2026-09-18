@@ -3,6 +3,13 @@ import { parseStringPromise } from 'xml2js';
 
 import { getConfig } from './config';
 import {
+  isAcquisitionRel,
+  isCatalogChromeRel,
+  isLikelyNavigationEntry,
+  isNavigationLink,
+  isNavigationRel,
+} from './opds-entry';
+import {
   BookAcquisitionLink,
   BookCatalogResult,
   BookDetail,
@@ -98,19 +105,6 @@ function mapFormat(type: string): 'epub' | 'pdf' | null {
   return null;
 }
 
-function isAcquisitionRel(rel?: string): boolean {
-  return !!rel && rel.includes('opds-spec.org/acquisition');
-}
-
-function isNavigationRel(rel?: string): boolean {
-  return rel === 'subsection' || rel === 'collection' || rel === 'start';
-}
-
-function isNavigationLink(link: ParsedFeedLink): boolean {
-  const type = (link.type || '').toLowerCase();
-  return isNavigationRel(link.rel) || type.includes('kind=navigation') || (type.includes('opds-catalog') && !isAcquisitionRel(link.rel));
-}
-
 function isCoverRel(rel?: string): boolean {
   if (!rel) return false;
   const normalized = rel.toLowerCase();
@@ -153,12 +147,6 @@ function extractAcquisitionLinks(entry: ParsedFeedEntry): BookAcquisitionLink[] 
       title: link.title,
       isIndirect: !!link.rel?.includes('indirect'),
     }));
-}
-
-function isLikelyNavigationEntry(entry: ParsedFeedEntry): boolean {
-  const hasAcquisition = extractAcquisitionLinks(entry).length > 0;
-  const hasNavigationLink = entry.links.some((link) => isNavigationLink(link));
-  return hasNavigationLink && !hasAcquisition;
 }
 
 function mapEntryToItem(source: BookSource, entry: ParsedFeedEntry): BookListItem {
@@ -462,7 +450,7 @@ export class OPDSClient {
       entries: bookEntries.map((entry) => mapEntryToItem(source, entry)),
       navigation: [
         ...feed.links
-          .filter((link) => isNavigationLink(link) && link.rel !== 'next' && link.rel !== 'previous' && !!(link.title || '').trim())
+          .filter((link) => isNavigationLink(link) && !isCatalogChromeRel(link.rel) && !!(link.title || '').trim())
           .map((link) => ({
             title: (link.title || '').trim(),
             href: link.href,

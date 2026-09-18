@@ -2,7 +2,7 @@
 
 'use client';
 
-import { Blend, Cat, Clover, Container, Film, Globe, Home, Star, Tv, TvMinimalPlay, Users } from 'lucide-react';
+import { Blend, BookMarked, BookOpen, Cat, Clover, Container, Film, Globe, Home, Music, Star, Tv, TvMinimalPlay, Users } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -87,6 +87,33 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
         label: '综艺',
         href: '/douban?type=show',
       },
+      ...(runtimeConfig?.SUWAYOMI_ENABLED
+        ? [
+            {
+              icon: BookOpen,
+              label: '漫画',
+              href: '/manga',
+            },
+          ]
+        : []),
+      ...(runtimeConfig?.BOOKS_ENABLED
+        ? [
+            {
+              icon: BookMarked,
+              label: '电子书',
+              href: '/books',
+            },
+          ]
+        : []),
+      ...(runtimeConfig?.MUSIC_ENABLED
+        ? [
+            {
+              icon: Music,
+              label: '音乐',
+              href: '/music',
+            },
+          ]
+        : []),
       ...(runtimeConfig?.LIVE_ENABLED
         ? [
             {
@@ -152,10 +179,16 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
     const decodedActive = decodeURIComponent(currentActive);
     const decodedItemHref = decodeURIComponent(href);
 
+    const itemPath = decodedItemHref.split('?')[0];
+    const extraSection =
+      itemPath === '/manga' || itemPath === '/books' || itemPath === '/music';
+
     return (
       decodedActive === decodedItemHref ||
       (decodedActive.startsWith('/douban') &&
-        decodedActive.includes(`type=${typeMatch}`))
+        decodedActive.includes(`type=${typeMatch}`)) ||
+      (extraSection &&
+        (decodedActive === itemPath || decodedActive.startsWith(`${itemPath}/`)))
     );
   };
 

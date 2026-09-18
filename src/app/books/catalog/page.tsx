@@ -15,6 +15,7 @@ import {
 } from 'react';
 
 import { BookCatalogResult, BookListItem, BookSource } from '@/lib/book.types';
+import { isCatalogChromeRel } from '@/lib/opds-entry';
 import {
   buildBookDetailPath,
   cacheBookListItem,
@@ -166,11 +167,9 @@ export default function BooksCatalogPage() {
   useEffect(() => {
     if (!sourceId || href || catalogNavigation.length === 0) return;
     const firstNavigationItem = catalogNavigation.find((item) => {
-      const rel = (item.rel || '').toLowerCase();
       return (
         item.href &&
-        rel !== 'next' &&
-        rel !== 'previous' &&
+        !isCatalogChromeRel(item.rel) &&
         isMeaningfulNavTitle(item.title)
       );
     });
@@ -450,8 +449,7 @@ export default function BooksCatalogPage() {
 
   const navigationItems = useMemo(() => {
     const items = (catalogNavigation || []).filter((item) => {
-      const rel = (item.rel || '').toLowerCase();
-      if (rel === 'next' || rel === 'previous') return false;
+      if (isCatalogChromeRel(item.rel)) return false;
       return isMeaningfulNavTitle(item.title);
     });
 
