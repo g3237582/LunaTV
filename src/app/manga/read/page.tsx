@@ -12,6 +12,7 @@ import { processImageUrl } from '@/lib/utils';
 
 import {
   LIBRARY_BUTTON,
+  LIBRARY_FIELD,
   LIBRARY_FOCUS,
   LIBRARY_GHOST_BUTTON,
   LIBRARY_MUTED,
@@ -150,6 +151,8 @@ export default function MangaReadPage() {
   const [chapterListDesc, setChapterListDesc] = useState(false);
   const [mangaDetail, setMangaDetail] = useState<MangaDetail | null>(null);
   const [showChapterComplete, setShowChapterComplete] = useState(false);
+  const [jumpDialogOpen, setJumpDialogOpen] = useState(false);
+  const [jumpValue, setJumpValue] = useState('');
 
   const verticalPageRefs = useRef<Array<HTMLDivElement | null>>([]);
   const horizontalContainerRef = useRef<HTMLDivElement | null>(null);
@@ -708,6 +711,33 @@ export default function MangaReadPage() {
     });
   };
 
+  const openJumpDialog = () => {
+    if (pages.length <= 1) return;
+    setJumpValue(String(Math.min(activePage + 1, pages.length)));
+    setJumpDialogOpen(true);
+  };
+
+  const jumpToPage = (page: number) => {
+    const next = clampPage(page);
+
+    if (readMode === 'vertical') {
+      // 大跨度跳页用瞬时定位，平滑滚动会一路扫过中间所有图
+      pendingAnchorPageRef.current = null;
+      verticalPageRefs.current[next]?.scrollIntoView({ block: 'start' });
+    } else if (readMode === 'horizontal') {
+      scrollHorizontalToPage(next, 'auto');
+    }
+
+    setActivePage(next);
+  };
+
+  const submitJump = () => {
+    const parsed = Number.parseInt(jumpValue, 10);
+    setJumpDialogOpen(false);
+    if (!Number.isFinite(parsed)) return;
+    jumpToPage(parsed - 1);
+  };
+
   const goPrev = () => {
     if (!pages.length) return;
     if (readMode === 'vertical') {
@@ -1057,6 +1087,54 @@ export default function MangaReadPage() {
           </div>
         )}
 
+        {jumpDialogOpen && (
+          <div
+            className='fixed inset-0 z-30 flex items-center justify-center bg-black/60 px-4'
+            onClick={(event) => {
+              event.stopPropagation();
+              setJumpDialogOpen(false);
+            }}
+          >
+            <form
+              className={cn(READER_SHEET, 'w-full max-w-xs p-6')}
+              onClick={(event) => event.stopPropagation()}
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitJump();
+              }}
+            >
+              <div className={cn('text-base font-semibold', LIBRARY_TEXT, LIBRARY_SERIF)}>
+                跳转到指定页
+              </div>
+              <div className={cn('mt-1 text-xs', LIBRARY_MUTED)}>
+                共 {pages.length} 页
+              </div>
+              <input
+                autoFocus
+                type='number'
+                inputMode='numeric'
+                min={1}
+                max={pages.length}
+                value={jumpValue}
+                onChange={(event) => setJumpValue(event.target.value)}
+                className={cn(LIBRARY_FIELD, 'mt-4 px-3 py-2')}
+              />
+              <div className='mt-5 flex gap-3'>
+                <button
+                  type='button'
+                  className={cn('flex-1 px-4 py-3', LIBRARY_GHOST_BUTTON)}
+                  onClick={() => setJumpDialogOpen(false)}
+                >
+                  取消
+                </button>
+                <button type='submit' className={cn('flex-1 px-4 py-3', LIBRARY_BUTTON)}>
+                  跳转
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
         <div
           className={`fixed right-3 top-1/2 z-20 h-40 w-1 -translate-y-1/2 overflow-hidden rounded-full bg-library-edge/80 transition-all duration-200 dark:bg-library-night-edge/80 ${
             controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
@@ -1069,14 +1147,20 @@ export default function MangaReadPage() {
         </div>
 
         {pages.length > 0 && (
-          <div
+          <button
+            type='button'
+            onClick={(event) => {
+              event.stopPropagation();
+              openJumpDialog();
+            }}
             className={cn(
-              'pointer-events-none fixed bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full px-2.5 py-0.5 text-sm font-medium',
+              'fixed bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full px-2.5 py-0.5 text-sm font-medium',
+              pages.length > 1 ? 'cursor-pointer' : 'pointer-events-none',
               READER_HUD
             )}
           >
             {Math.min(activePage + 1, pages.length)}/{pages.length}
-          </div>
+          </button>
         )}
 
         {pages.length === 0 && <MangaReadSkeleton readMode={readMode} pageGap={pageGap} />}
