@@ -10644,50 +10644,89 @@ const ThemeConfigComponent = ({
           播放页、直播页首屏加载动画的款式。颜色跟随站点主题色，保存后刷新页面生效
         </p>
 
-        <div className='space-y-4'>
-          <label className='flex items-center space-x-3 cursor-pointer'>
-            <input
-              type='radio'
-              checked={themeSettings.loadingStyle === 'talisman'}
-              onChange={() =>
-                setThemeSettings((prev) => ({
-                  ...prev,
-                  loadingStyle: 'talisman',
-                }))
+        <div className='grid grid-cols-1 sm:grid-cols-3 gap-3'>
+          {(
+            [
+              {
+                id: 'talisman',
+                name: '魔法阵',
+                desc: '默认',
+                preview: (
+                  <svg
+                    viewBox='0 0 100 100'
+                    className='w-12 h-12 text-green-500'
+                    fill='none'
+                    stroke='currentColor'
+                  >
+                    <circle cx='50' cy='50' r='46' strokeWidth='2' />
+                    <circle
+                      cx='50'
+                      cy='50'
+                      r='34'
+                      strokeWidth='1.5'
+                      strokeDasharray='4 4'
+                    />
+                    <polygon points='50,10 85,70 15,70' strokeWidth='2' />
+                    <polygon points='50,90 15,30 85,30' strokeWidth='2' />
+                    <circle cx='50' cy='50' r='6' fill='currentColor' />
+                  </svg>
+                ),
+              },
+              {
+                id: 'grid',
+                name: '方格',
+                desc: '',
+                preview: (
+                  <div className='grid grid-cols-2 gap-1 w-12 h-12'>
+                    {Array.from({ length: 4 }).map((_, i) => (
+                      <div
+                        key={i}
+                        className={`rounded-sm ${
+                          i < 2
+                            ? 'bg-green-500'
+                            : 'bg-gray-300 dark:bg-gray-600'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                ),
+              },
+              {
+                id: 'classic',
+                name: '旧版',
+                desc: '',
+                preview: <span className='text-4xl leading-none'>📺</span>,
+              },
+            ] as const
+          ).map((opt) => (
+            <button
+              key={opt.id}
+              type='button'
+              onClick={() =>
+                setThemeSettings((prev) => ({ ...prev, loadingStyle: opt.id }))
               }
-              className='w-4 h-4 text-blue-600'
-            />
-            <span className='text-gray-900 dark:text-gray-100'>
-              魔法阵（默认）
-            </span>
-          </label>
-
-          <label className='flex items-center space-x-3 cursor-pointer'>
-            <input
-              type='radio'
-              checked={themeSettings.loadingStyle === 'grid'}
-              onChange={() =>
-                setThemeSettings((prev) => ({ ...prev, loadingStyle: 'grid' }))
-              }
-              className='w-4 h-4 text-blue-600'
-            />
-            <span className='text-gray-900 dark:text-gray-100'>方格</span>
-          </label>
-
-          <label className='flex items-center space-x-3 cursor-pointer'>
-            <input
-              type='radio'
-              checked={themeSettings.loadingStyle === 'classic'}
-              onChange={() =>
-                setThemeSettings((prev) => ({
-                  ...prev,
-                  loadingStyle: 'classic',
-                }))
-              }
-              className='w-4 h-4 text-blue-600'
-            />
-            <span className='text-gray-900 dark:text-gray-100'>旧版</span>
-          </label>
+              className={`relative p-4 border-2 rounded-lg transition-all ${
+                themeSettings.loadingStyle === opt.id
+                  ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                  : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
+              }`}
+            >
+              <div className='flex flex-col items-center gap-2'>
+                <div className='w-12 h-12 flex items-center justify-center'>
+                  {opt.preview}
+                </div>
+                <span className='text-sm font-medium text-gray-700 dark:text-gray-300 text-center'>
+                  {opt.name}
+                  {opt.desc ? `（${opt.desc}）` : ''}
+                </span>
+              </div>
+              {themeSettings.loadingStyle === opt.id && (
+                <div className='absolute top-2 right-2'>
+                  <Check className='w-5 h-5 text-blue-600 dark:text-blue-400' />
+                </div>
+              )}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -18383,6 +18422,18 @@ function AdminPageClient() {
     telegramConfig: false,
   });
 
+  // PC 左右布局：当前选中的区块（单选），持久化以便保存刷新后仍停留在原区块
+  const [activeKey, setActiveKey] = useState<string>(() => {
+    if (typeof window === 'undefined') return 'siteConfig';
+    return localStorage.getItem('admin_active_section') || 'siteConfig';
+  });
+  // PC 内容区滚动容器，切换区块时回到顶部
+  const contentScrollRef = useRef<HTMLDivElement | null>(null);
+  // PC 侧边栏中分组的展开状态
+  const [expandedGroups, setExpandedGroups] = useState<{
+    [key: string]: boolean;
+  }>({ mediaLibrary: true });
+
   // 获取管理员配置
   // showLoading 用于控制是否在请求期间显示整体加载骨架。
   const fetchConfig = useCallback(async (showLoading = false) => {
@@ -18473,8 +18524,18 @@ function AdminPageClient() {
   useEffect(() => {
     // 首次加载时显示骨架
     fetchConfig(true);
-    // 不再自动获取用户列表，等用户打开用户管理选项卡时再获取
+    // 若恢复的区块是用户管理，则补拉一次用户列表
+    if (activeKey === 'userConfig') {
+      fetchUsersV2();
+    }
+    // 仅在挂载时执行
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchConfig]);
+
+  // PC 切换区块时，内容区滚动回顶部
+  useEffect(() => {
+    contentScrollRef.current?.scrollTo({ top: 0 });
+  }, [activeKey]);
 
   // 切换标签展开状态
   const toggleTab = (tabKey: string) => {
@@ -18489,6 +18550,23 @@ function AdminPageClient() {
     if (tabKey === 'userConfig' && !wasExpanded && !usersV2) {
       fetchUsersV2();
     }
+  };
+
+  // PC 左右布局：选中某个区块
+  const selectSection = (key: string) => {
+    setActiveKey(key);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('admin_active_section', key);
+    }
+    // 首次进入用户管理时懒加载用户列表
+    if (key === 'userConfig' && !usersV2) {
+      fetchUsersV2();
+    }
+  };
+
+  // PC 侧边栏：切换分组展开
+  const toggleGroup = (key: string) => {
+    setExpandedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   // 新增: 重置配置处理函数
@@ -18589,6 +18667,295 @@ function AdminPageClient() {
     );
   }
 
+  // 管理面板区块导航配置（PC 侧边栏与移动端手风琴共用同一份数据）
+  type AdminNavItem = {
+    key: string;
+    title: string;
+    icon: React.ReactNode;
+    ownerOnly?: boolean;
+    render?: () => React.ReactNode;
+    children?: AdminNavItem[];
+  };
+
+  const navIconClass = 'text-gray-600 dark:text-gray-400';
+  const navItems: AdminNavItem[] = [
+    {
+      key: 'configFile',
+      title: '配置文件',
+      ownerOnly: true,
+      icon: <FileText size={20} className={navIconClass} />,
+      render: () => (
+        <ConfigFileComponent config={config} refreshConfig={fetchConfig} />
+      ),
+    },
+    {
+      key: 'siteConfig',
+      title: '站点配置',
+      icon: <Settings size={20} className={navIconClass} />,
+      render: () => (
+        <SiteConfigComponent config={config} refreshConfig={fetchConfig} />
+      ),
+    },
+    {
+      key: 'registrationConfig',
+      title: '注册配置',
+      icon: <UserPlus size={20} className={navIconClass} />,
+      render: () => (
+        <RegistrationConfigComponent
+          config={config}
+          refreshConfig={fetchConfig}
+        />
+      ),
+    },
+    {
+      key: 'themeConfig',
+      title: '个性化配置',
+      icon: <Palette size={20} className={navIconClass} />,
+      render: () => (
+        <ThemeConfigComponent config={config} refreshConfig={fetchConfig} />
+      ),
+    },
+    {
+      key: 'userConfig',
+      title: '用户管理',
+      icon: <Users size={20} className={navIconClass} />,
+      render: () => (
+        <UserConfig
+          config={config}
+          role={role}
+          refreshConfig={refreshConfigAndUsers}
+          usersV2={usersV2}
+          userPage={userPage}
+          userTotalPages={userTotalPages}
+          userTotal={userTotal}
+          fetchUsersV2={fetchUsersV2}
+          userListLoading={userListLoading}
+          userSearch={userSearch}
+          setUserSearch={setUserSearch}
+        />
+      ),
+    },
+    {
+      key: 'videoSource',
+      title: '视频源配置',
+      icon: <Video size={20} className={navIconClass} />,
+      render: () => (
+        <VideoSourceConfig config={config} refreshConfig={fetchConfig} />
+      ),
+    },
+    {
+      key: 'sourceScriptLab',
+      title: '视频源脚本',
+      icon: <Bot size={20} className={navIconClass} />,
+      render: () => <VideoSourceScriptLab />,
+    },
+    {
+      key: 'musicConfig',
+      title: '音乐配置',
+      icon: (
+        <svg
+          width='20'
+          height='20'
+          viewBox='0 0 24 24'
+          fill='none'
+          stroke='currentColor'
+          strokeWidth='2'
+          strokeLinecap='round'
+          strokeLinejoin='round'
+          className={navIconClass}
+        >
+          <path d='M9 18V5l12-2v13' />
+          <circle cx='6' cy='18' r='3' />
+          <circle cx='18' cy='16' r='3' />
+        </svg>
+      ),
+      render: () => (
+        <MusicConfigComponent config={config} refreshConfig={fetchConfig} />
+      ),
+    },
+    {
+      key: 'suwayomiConfig',
+      title: '漫画配置',
+      icon: <BookOpen size={20} className={navIconClass} />,
+      render: () => (
+        <SuwayomiConfigComponent config={config} refreshConfig={fetchConfig} />
+      ),
+    },
+    {
+      key: 'opdsConfig',
+      title: '电子书配置',
+      icon: <BookMarked size={20} className={navIconClass} />,
+      render: () => (
+        <OPDSConfigComponent config={config} refreshConfig={fetchConfig} />
+      ),
+    },
+    {
+      key: 'liveSource',
+      title: '电视直播源配置',
+      icon: <Tv size={20} className={navIconClass} />,
+      render: () => (
+        <LiveSourceConfig config={config} refreshConfig={fetchConfig} />
+      ),
+    },
+    {
+      key: 'webLive',
+      title: '网络直播配置',
+      icon: <Globe size={20} className={navIconClass} />,
+      render: () => (
+        <WebLiveConfig config={config} refreshConfig={fetchConfig} />
+      ),
+    },
+    {
+      key: 'mediaLibrary',
+      title: '私人影库',
+      icon: (
+        <Database size={20} className='text-yellow-700 dark:text-yellow-400' />
+      ),
+      children: [
+        {
+          key: 'openListConfig',
+          title: 'Openlist配置',
+          icon: <FolderOpen size={20} className={navIconClass} />,
+          render: () => (
+            <OpenListConfigComponent
+              config={config}
+              refreshConfig={fetchConfig}
+            />
+          ),
+        },
+        {
+          key: 'embyConfig',
+          title: 'Emby 媒体库',
+          icon: <FolderOpen size={20} className={navIconClass} />,
+          render: () => (
+            <EmbyConfigComponent config={config} refreshConfig={fetchConfig} />
+          ),
+        },
+        {
+          key: 'xiaoyaConfig',
+          title: '小雅配置',
+          icon: <FolderOpen size={20} className={navIconClass} />,
+          render: () => (
+            <XiaoyaConfigComponent
+              config={config}
+              refreshConfig={fetchConfig}
+            />
+          ),
+        },
+        {
+          key: 'movieRequests',
+          title: '求片管理',
+          icon: <Video size={20} className={navIconClass} />,
+          render: () => (
+            <MovieRequestsComponent
+              config={config}
+              refreshConfig={fetchConfig}
+            />
+          ),
+        },
+        {
+          key: 'animeSubscription',
+          title: '追番订阅',
+          icon: <Cat size={20} className={navIconClass} />,
+          render: () => (
+            <AnimeSubscriptionComponent
+              config={config}
+              refreshConfig={fetchConfig}
+            />
+          ),
+        },
+        {
+          key: 'netDiskConfig',
+          title: '网盘配置',
+          icon: <Cloud size={20} className={navIconClass} />,
+          render: () => (
+            <NetDiskConfigComponent
+              config={config}
+              refreshConfig={fetchConfig}
+            />
+          ),
+        },
+      ],
+    },
+    {
+      key: 'aiConfig',
+      title: 'AI设定',
+      icon: <Bot size={20} className={navIconClass} />,
+      render: () => (
+        <AIConfigComponent config={config} refreshConfig={fetchConfig} />
+      ),
+    },
+    {
+      key: 'emailConfig',
+      title: '邮件配置',
+      icon: <Mail size={20} className={navIconClass} />,
+      render: () => (
+        <EmailConfigComponent config={config} refreshConfig={fetchConfig} />
+      ),
+    },
+    {
+      key: 'telegramConfig',
+      title: 'Telegram Bot',
+      icon: <Send size={20} className={navIconClass} />,
+      render: () => (
+        <TelegramConfigComponent config={config} refreshConfig={fetchConfig} />
+      ),
+    },
+    {
+      key: 'categoryConfig',
+      title: '分类配置',
+      icon: <FolderOpen size={20} className={navIconClass} />,
+      render: () => (
+        <CategoryConfig config={config} refreshConfig={fetchConfig} />
+      ),
+    },
+    {
+      key: 'customAdFilter',
+      title: '自定义去广告',
+      icon: (
+        <svg
+          width='20'
+          height='20'
+          viewBox='0 0 24 24'
+          fill='none'
+          stroke='currentColor'
+          strokeWidth='2'
+          strokeLinecap='round'
+          strokeLinejoin='round'
+          className={navIconClass}
+        >
+          <path d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z' />
+          <path d='M8 12h8' />
+        </svg>
+      ),
+      render: () => (
+        <CustomAdFilterConfig config={config} refreshConfig={fetchConfig} />
+      ),
+    },
+    {
+      key: 'dataMigration',
+      title: '数据迁移',
+      ownerOnly: true,
+      icon: <Database size={20} className={navIconClass} />,
+      render: () => <DataMigration onRefreshConfig={refreshConfigAndUsers} />,
+    },
+  ];
+
+  // 根据 key 查找区块（含分组子项）
+  const findNavItem = (key: string): AdminNavItem | undefined => {
+    for (const it of navItems) {
+      if (it.key === key) return it;
+      const child = it.children?.find((c) => c.key === key);
+      if (child) return child;
+    }
+    return undefined;
+  };
+
+  const visibleNavItems = navItems.filter(
+    (it) => !it.ownerOnly || role === 'owner'
+  );
+  const activeItem = findNavItem(activeKey);
+
   return (
     <PageLayout activePath='/admin'>
       <div className='px-2 sm:px-10 py-4 sm:py-8'>
@@ -18668,6 +19035,76 @@ function AdminPageClient() {
             </div>
           )}
 
+          {/* PC：左右结构（侧边栏 + 内容区），两栏各自独立滚动 */}
+          <div className='hidden lg:flex gap-6 lg:h-[calc(100vh-7rem)]'>
+            {/* 侧边栏 */}
+            <nav className='w-56 shrink-0 h-full overflow-y-auto pr-1'>
+              <div className='space-y-1'>
+                {visibleNavItems.map((item) =>
+                  item.children ? (
+                    <div key={item.key}>
+                      <button
+                        onClick={() => toggleGroup(item.key)}
+                        className='w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors'
+                      >
+                        <span className='flex items-center gap-2 min-w-0'>
+                          {item.icon}
+                          <span className='truncate'>{item.title}</span>
+                        </span>
+                        {expandedGroups[item.key] ? (
+                          <ChevronUp size={16} />
+                        ) : (
+                          <ChevronDown size={16} />
+                        )}
+                      </button>
+                      {expandedGroups[item.key] && (
+                        <div className='mt-1 ml-3 pl-3 border-l border-gray-200 dark:border-gray-700 space-y-1'>
+                          {item.children.map((child) => (
+                            <button
+                              key={child.key}
+                              onClick={() => selectSection(child.key)}
+                              className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                                activeKey === child.key
+                                  ? 'bg-green-500/10 text-green-600 dark:text-green-400 font-medium'
+                                  : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
+                              }`}
+                            >
+                              {child.icon}
+                              <span className='truncate'>{child.title}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      key={item.key}
+                      onClick={() => selectSection(item.key)}
+                      className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                        activeKey === item.key
+                          ? 'bg-green-500/10 text-green-600 dark:text-green-400 font-medium'
+                          : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800'
+                      }`}
+                    >
+                      {item.icon}
+                      <span className='truncate'>{item.title}</span>
+                    </button>
+                  )
+                )}
+              </div>
+            </nav>
+
+            {/* 内容区（独立滚动） */}
+            <div
+              ref={contentScrollRef}
+              className='flex-1 min-w-0 h-full overflow-y-auto pr-1'
+            >
+              {activeItem?.render?.()}
+            </div>
+          </div>
+
+          {/* 移动端 / 窄屏：保留原有手风琴 */}
+          <div className='lg:hidden'>
           {/* 配置文件标签 - 仅站长可见 */}
           {role === 'owner' && (
             <CollapsibleTab
@@ -19090,6 +19527,7 @@ function AdminPageClient() {
                 <DataMigration onRefreshConfig={refreshConfigAndUsers} />
               </CollapsibleTab>
             )}
+          </div>
           </div>
         </div>
       </div>
