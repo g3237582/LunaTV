@@ -8088,8 +8088,8 @@ const VideoSourceConfig = ({
                   <h3 className='text-xl font-semibold text-gray-900 dark:text-gray-100'>
                     客户端去广告配置
                   </h3>
-                  <p className='mt-1 text-sm text-gray-600 dark:text-gray-400'>
-                    勾选后，用户使用 MoonTVPlus APP 或 OrionTV 观看这些视频源时，会自动过滤片头/插播广告。
+                  <p className='mt-1 text-sm text-amber-500 dark:text-amber-400'>
+                    ⚠️客户端已具备本地去广告功能，该功能可能在未来移除
                   </p>
                 </div>
                 <button
