@@ -10045,7 +10045,7 @@ function PlayPageClient() {
       <PageLayout activePath='/play' hideNavigation={isWebFullscreen}>
         {/* fixed 铺满视口：main 在移动端有 3rem 顶距和底部安全区，
             用 min-h-screen 会把内容整体压到视口中心偏下 */}
-        <div className='fixed inset-0 flex items-center justify-center pointer-events-none'>
+        <div className='mtv-load-overlay fixed inset-0 flex items-center justify-center pointer-events-none'>
           <div className='text-center max-w-md mx-auto px-6'>
             {/* 三种加载款式（旧版那一套各页自备） */}
             <LoadingStyle
