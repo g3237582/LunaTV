@@ -157,6 +157,8 @@ export interface AdminConfig {
     progressThumbType?: 'default' | 'preset' | 'custom'; // 图标类型
     progressThumbPresetId?: string; // 预制图标ID
     progressThumbCustomUrl?: string; // 自定义图标URL
+    // 初始化加载样式：播放页/直播页首屏加载动画的款式
+    loadingStyle?: 'classic' | 'grid' | 'talisman';
   };
   OpenListConfig?: {
     Enabled: boolean; // 是否启用私人影库功能

@@ -9860,6 +9860,7 @@ const ThemeConfigComponent = ({
     progressThumbType: 'default' as 'default' | 'preset' | 'custom',
     progressThumbPresetId: '',
     progressThumbCustomUrl: '',
+    loadingStyle: 'talisman' as 'classic' | 'grid' | 'talisman',
   });
   const [loginBackgroundImages, setLoginBackgroundImages] = useState<string[]>([
     '',
@@ -9882,6 +9883,7 @@ const ThemeConfigComponent = ({
         progressThumbType: config.ThemeConfig.progressThumbType || 'default',
         progressThumbPresetId: config.ThemeConfig.progressThumbPresetId || '',
         progressThumbCustomUrl: config.ThemeConfig.progressThumbCustomUrl || '',
+        loadingStyle: config.ThemeConfig.loadingStyle || 'talisman',
       });
 
       // 解析背景图配置
@@ -10630,6 +10632,63 @@ const ThemeConfigComponent = ({
             )}
           </div>
         )}
+      </div>
+
+      {/* 初始化加载样式配置 */}
+      <div className='bg-white dark:bg-gray-800 rounded-lg p-6 border border-gray-200 dark:border-gray-700'>
+        <h3 className='text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center gap-2'>
+          <Video className='w-5 h-5' />
+          初始化加载样式
+        </h3>
+        <p className='text-sm text-gray-600 dark:text-gray-400 mb-4'>
+          播放页、直播页首屏加载动画的款式。颜色跟随站点主题色，保存后刷新页面生效
+        </p>
+
+        <div className='space-y-4'>
+          <label className='flex items-center space-x-3 cursor-pointer'>
+            <input
+              type='radio'
+              checked={themeSettings.loadingStyle === 'talisman'}
+              onChange={() =>
+                setThemeSettings((prev) => ({
+                  ...prev,
+                  loadingStyle: 'talisman',
+                }))
+              }
+              className='w-4 h-4 text-blue-600'
+            />
+            <span className='text-gray-900 dark:text-gray-100'>
+              魔法阵（默认）
+            </span>
+          </label>
+
+          <label className='flex items-center space-x-3 cursor-pointer'>
+            <input
+              type='radio'
+              checked={themeSettings.loadingStyle === 'grid'}
+              onChange={() =>
+                setThemeSettings((prev) => ({ ...prev, loadingStyle: 'grid' }))
+              }
+              className='w-4 h-4 text-blue-600'
+            />
+            <span className='text-gray-900 dark:text-gray-100'>方格</span>
+          </label>
+
+          <label className='flex items-center space-x-3 cursor-pointer'>
+            <input
+              type='radio'
+              checked={themeSettings.loadingStyle === 'classic'}
+              onChange={() =>
+                setThemeSettings((prev) => ({
+                  ...prev,
+                  loadingStyle: 'classic',
+                }))
+              }
+              className='w-4 h-4 text-blue-600'
+            />
+            <span className='text-gray-900 dark:text-gray-100'>旧版</span>
+          </label>
+        </div>
       </div>
 
       {/* 保存按钮 */}

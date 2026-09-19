@@ -40,6 +40,7 @@ export async function POST(request: NextRequest) {
       progressThumbType,
       progressThumbPresetId,
       progressThumbCustomUrl,
+      loadingStyle,
     } = body as {
       enableBuiltInTheme: boolean;
       builtInTheme: string;
@@ -52,6 +53,7 @@ export async function POST(request: NextRequest) {
       progressThumbType?: 'default' | 'preset' | 'custom';
       progressThumbPresetId?: string;
       progressThumbCustomUrl?: string;
+      loadingStyle?: 'classic' | 'grid' | 'talisman';
     };
 
     // 参数校验
@@ -146,6 +148,12 @@ export async function POST(request: NextRequest) {
       progressThumbType: progressThumbType || 'default',
       progressThumbPresetId: progressThumbPresetId?.trim() || undefined,
       progressThumbCustomUrl: progressThumbCustomUrl?.trim() || undefined,
+      loadingStyle:
+        loadingStyle === 'classic' ||
+        loadingStyle === 'grid' ||
+        loadingStyle === 'talisman'
+          ? loadingStyle
+          : 'talisman',
     };
 
     // 写入数据库

@@ -2,7 +2,7 @@
 
 'use client';
 
-import { AlertCircle, Cloud, Heart, Keyboard, Loader2, Router, Sparkles, Users, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Cloud, FileText, Heart, Keyboard, Link2, Loader2, Play, RefreshCw, Router, Search, Sparkles, Star, Users, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -89,6 +89,10 @@ import DoubanComments from '@/components/DoubanComments';
 import DownloadEpisodeSelector from '@/components/DownloadEpisodeSelector';
 import Drawer from '@/components/Drawer';
 import EpisodeSelector from '@/components/EpisodeSelector';
+import LoadingStyle, {
+  LoadingErrorStyle,
+  type LoadingStep,
+} from '@/components/LoadingStyle';
 import PageLayout from '@/components/PageLayout';
 import PansouSearch from '@/components/PansouSearch';
 import ProxyImage from '@/components/ProxyImage';
@@ -213,6 +217,34 @@ const PLAY_SHORTCUT_GROUPS = [
       { keys: ['小键盘 /'], description: '恢复 1x' },
     ],
   },
+];
+
+/* -----------------------------------------------------------------------------
+ * 初始化加载动画（后台「个性化配置 → 初始化加载样式」可切换旧版/方格/魔法阵）
+ *
+ * 步骤按真实入口生成，不是固定四步：
+ *   directplay 入口 → 直链 → 就绪（两步，不经优选）
+ *   其余入口       → 搜索/详情 → 优选 → 就绪（优选会被优选开关整个跳过）
+ * 「搜索」用于没带 source/id 的入口，「详情」用于带 source+id 的入口，
+ * 两者是第一步的两副面孔，不是先后两步。
+ *
+ * 款式本身见 components/LoadingStyle。
+ * -------------------------------------------------------------------------- */
+type LoadingStepKey = 'search' | 'detail' | 'direct' | 'prefer' | 'ready';
+
+const LOADING_STEP_META: Record<LoadingStepKey, LoadingStep> = {
+  search: { label: '搜索', icon: <Search /> },
+  detail: { label: '详情', icon: <FileText /> },
+  direct: { label: '直链', icon: <Link2 /> },
+  prefer: { label: '优选', icon: <Star /> },
+  ready: { label: '就绪', icon: <Play /> },
+};
+
+/* 播放器遮罩只有两步：初始化，然后播放。
+ * 换源、换集对观众都只是「要播了」，用「换源」这类内部说法没人看得懂。 */
+const VIDEO_LOAD_STEPS: LoadingStep[] = [
+  { label: '初始化', icon: <Loader2 /> },
+  { label: '播放', icon: <Play /> },
 ];
 
 function PlayPageClient() {
@@ -9976,89 +10008,133 @@ function PlayPageClient() {
     };
   }, []);
 
+  // 初始化加载样式的步骤模型（说明见文件顶部 LOADING_STEP_META 上方注释）
+  const loadEntry: LoadingStepKey =
+    searchParams.get('source') === 'directplay'
+      ? 'direct'
+      : searchParams.get('source') && searchParams.get('id')
+        ? 'detail'
+        : 'search';
+  const loadSteps: LoadingStepKey[] =
+    loadEntry === 'direct'
+      ? ['direct', 'ready']
+      : [loadEntry, 'prefer', 'ready'];
+  const activeStepKey: LoadingStepKey =
+    loadingStage === 'ready'
+      ? 'ready'
+      : loadingStage === 'preferring'
+        ? 'prefer'
+        : loadEntry;
+  const activeStepIdx = Math.max(0, loadSteps.indexOf(activeStepKey));
+  // 方格/符阵不出现 emoji：阶段语义由描边图标承担，文案只留纯中文
+  const plainLoadingMessage = loadingMessage
+    .replace(/^[^一-龥]+/, '')
+    .replace(/[\s.．。]+$/, '');
+
+  // 播放器遮罩的两步（定义见文件顶部 VIDEO_LOAD_STEPS）
+  const videoLoadStepIdx = videoLoadingStage === 'initing' ? 0 : 1;
+  const videoLoadMessage =
+    videoLoadingStage === 'sourceChanging'
+      ? '切换播放源'
+      : videoLoadingStage === 'episodeChanging'
+        ? '切换剧集'
+        : '视频加载中';
+
   if (loading) {
     return (
       <PageLayout activePath='/play' hideNavigation={isWebFullscreen}>
-        <div className='flex items-center justify-center min-h-screen bg-transparent'>
+        {/* fixed 铺满视口：main 在移动端有 3rem 顶距和底部安全区，
+            用 min-h-screen 会把内容整体压到视口中心偏下 */}
+        <div className='fixed inset-0 flex items-center justify-center pointer-events-none'>
           <div className='text-center max-w-md mx-auto px-6'>
-            {/* 动画影院图标 */}
-            <div className='relative mb-8'>
-              <div className='relative mx-auto w-24 h-24 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl shadow-2xl flex items-center justify-center transform hover:scale-105 transition-transform duration-300'>
-                <div className='text-white text-4xl'>
-                  {loadingStage === 'searching' && '🔍'}
-                  {loadingStage === 'preferring' && '⚡'}
-                  {loadingStage === 'fetching' && '🎬'}
-                  {loadingStage === 'ready' && '✨'}
-                </div>
-                {/* 旋转光环 */}
-                <div className='absolute -inset-2 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl opacity-20 animate-spin'></div>
-              </div>
+            {/* 三种加载款式（旧版那一套各页自备） */}
+            <LoadingStyle
+              steps={loadSteps.map((stepKey) => LOADING_STEP_META[stepKey])}
+              activeStepIdx={activeStepIdx}
+              message={plainLoadingMessage}
+              legacy={
+                <>
+                  {/* 动画影院图标 */}
+                  <div className='relative mb-8'>
+                    <div className='relative mx-auto w-24 h-24 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl shadow-2xl flex items-center justify-center transform hover:scale-105 transition-transform duration-300'>
+                      <div className='text-white text-4xl'>
+                        {loadingStage === 'searching' && '🔍'}
+                        {loadingStage === 'preferring' && '⚡'}
+                        {loadingStage === 'fetching' && '🎬'}
+                        {loadingStage === 'ready' && '✨'}
+                      </div>
+                      {/* 旋转光环 */}
+                      <div className='absolute -inset-2 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl opacity-20 animate-spin'></div>
+                    </div>
 
-              {/* 浮动粒子效果 */}
-              <div className='absolute top-0 left-0 w-full h-full pointer-events-none'>
-                <div className='absolute top-2 left-2 w-2 h-2 bg-green-400 rounded-full animate-bounce'></div>
-                <div
-                  className='absolute top-4 right-4 w-1.5 h-1.5 bg-emerald-400 rounded-full animate-bounce'
-                  style={{ animationDelay: '0.5s' }}
-                ></div>
-                <div
-                  className='absolute bottom-3 left-6 w-1 h-1 bg-lime-400 rounded-full animate-bounce'
-                  style={{ animationDelay: '1s' }}
-                ></div>
-              </div>
-            </div>
+                    {/* 浮动粒子效果 */}
+                    <div className='absolute top-0 left-0 w-full h-full pointer-events-none'>
+                      <div className='absolute top-2 left-2 w-2 h-2 bg-green-400 rounded-full animate-bounce'></div>
+                      <div
+                        className='absolute top-4 right-4 w-1.5 h-1.5 bg-emerald-400 rounded-full animate-bounce'
+                        style={{ animationDelay: '0.5s' }}
+                      ></div>
+                      <div
+                        className='absolute bottom-3 left-6 w-1 h-1 bg-lime-400 rounded-full animate-bounce'
+                        style={{ animationDelay: '1s' }}
+                      ></div>
+                    </div>
+                  </div>
 
-            {/* 进度指示器 */}
-            <div className='mb-6 w-80 mx-auto'>
-              <div className='flex justify-center space-x-2 mb-4'>
-                <div
-                  className={`w-3 h-3 rounded-full transition-all duration-500 ${loadingStage === 'searching' || loadingStage === 'fetching'
-                    ? 'bg-green-500 scale-125'
-                    : loadingStage === 'preferring' ||
-                      loadingStage === 'ready'
-                      ? 'bg-green-500'
-                      : 'bg-gray-300'
-                    }`}
-                ></div>
-                <div
-                  className={`w-3 h-3 rounded-full transition-all duration-500 ${loadingStage === 'preferring'
-                    ? 'bg-green-500 scale-125'
-                    : loadingStage === 'ready'
-                      ? 'bg-green-500'
-                      : 'bg-gray-300'
-                    }`}
-                ></div>
-                <div
-                  className={`w-3 h-3 rounded-full transition-all duration-500 ${loadingStage === 'ready'
-                    ? 'bg-green-500 scale-125'
-                    : 'bg-gray-300'
-                    }`}
-                ></div>
-              </div>
+                  {/* 进度指示器 */}
+                  <div className='mb-6 w-80 mx-auto'>
+                    <div className='flex justify-center space-x-2 mb-4'>
+                      <div
+                        className={`w-3 h-3 rounded-full transition-all duration-500 ${loadingStage === 'searching' || loadingStage === 'fetching'
+                          ? 'bg-green-500 scale-125'
+                          : loadingStage === 'preferring' ||
+                            loadingStage === 'ready'
+                            ? 'bg-green-500'
+                            : 'bg-gray-300'
+                          }`}
+                      ></div>
+                      <div
+                        className={`w-3 h-3 rounded-full transition-all duration-500 ${loadingStage === 'preferring'
+                          ? 'bg-green-500 scale-125'
+                          : loadingStage === 'ready'
+                            ? 'bg-green-500'
+                            : 'bg-gray-300'
+                          }`}
+                      ></div>
+                      <div
+                        className={`w-3 h-3 rounded-full transition-all duration-500 ${loadingStage === 'ready'
+                          ? 'bg-green-500 scale-125'
+                          : 'bg-gray-300'
+                          }`}
+                      ></div>
+                    </div>
 
-              {/* 进度条 */}
-              <div className='w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden'>
-                <div
-                  className='h-full bg-gradient-to-r from-green-500 to-emerald-600 rounded-full transition-all duration-1000 ease-out'
-                  style={{
-                    width:
-                      loadingStage === 'searching' ||
-                        loadingStage === 'fetching'
-                        ? '33%'
-                        : loadingStage === 'preferring'
-                          ? '66%'
-                          : '100%',
-                  }}
-                ></div>
-              </div>
-            </div>
+                    {/* 进度条 */}
+                    <div className='w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden'>
+                      <div
+                        className='h-full bg-gradient-to-r from-green-500 to-emerald-600 rounded-full transition-all duration-1000 ease-out'
+                        style={{
+                          width:
+                            loadingStage === 'searching' ||
+                              loadingStage === 'fetching'
+                              ? '33%'
+                              : loadingStage === 'preferring'
+                                ? '66%'
+                                : '100%',
+                        }}
+                      ></div>
+                    </div>
+                  </div>
 
-            {/* 加载消息 */}
-            <div className='space-y-2'>
-              <p className='text-xl font-semibold text-gray-800 dark:text-gray-200 animate-pulse'>
-                {loadingMessage}
-              </p>
-            </div>
+                  {/* 加载消息 */}
+                  <div className='space-y-2'>
+                    <p className='text-xl font-semibold text-gray-800 dark:text-gray-200 animate-pulse'>
+                      {loadingMessage}
+                    </p>
+                  </div>
+                </>
+              }
+            />
           </div>
         </div>
       </PageLayout>
@@ -10073,24 +10149,34 @@ function PlayPageClient() {
             <div className='w-full max-w-md text-center'>
               {/* 错误图标 */}
               <div className='relative mb-8'>
-                <div className='relative mx-auto flex h-24 w-24 items-center justify-center rounded-2xl bg-gradient-to-r from-red-500 to-orange-500 shadow-2xl transition-transform duration-300 hover:scale-105'>
-                  <div className='text-4xl text-white'>😵</div>
-                  {/* 脉冲效果 */}
-                  <div className='absolute -inset-2 animate-pulse rounded-2xl bg-gradient-to-r from-red-500 to-orange-500 opacity-20'></div>
-                </div>
+                {/* 失败态款式（旧版那一套各页自备） */}
+                <LoadingErrorStyle
+                  steps={loadSteps.map((stepKey) => LOADING_STEP_META[stepKey])}
+                  activeStepIdx={activeStepIdx}
+                  message={error}
+                  legacy={
+                    <>
+                      <div className='relative mx-auto flex h-24 w-24 items-center justify-center rounded-2xl bg-gradient-to-r from-red-500 to-orange-500 shadow-2xl transition-transform duration-300 hover:scale-105'>
+                        <div className='text-4xl text-white'>😵</div>
+                        {/* 脉冲效果 */}
+                        <div className='absolute -inset-2 animate-pulse rounded-2xl bg-gradient-to-r from-red-500 to-orange-500 opacity-20'></div>
+                      </div>
 
-                {/* 浮动错误粒子 */}
-                <div className='pointer-events-none absolute left-0 top-0 h-full w-full'>
-                  <div className='absolute left-2 top-2 h-2 w-2 animate-bounce rounded-full bg-red-400'></div>
-                  <div
-                    className='absolute right-4 top-4 h-1.5 w-1.5 animate-bounce rounded-full bg-orange-400'
-                    style={{ animationDelay: '0.5s' }}
-                  ></div>
-                  <div
-                    className='absolute bottom-3 left-6 h-1 w-1 animate-bounce rounded-full bg-yellow-400'
-                    style={{ animationDelay: '1s' }}
-                  ></div>
-                </div>
+                      {/* 浮动错误粒子 */}
+                      <div className='pointer-events-none absolute left-0 top-0 h-full w-full'>
+                        <div className='absolute left-2 top-2 h-2 w-2 animate-bounce rounded-full bg-red-400'></div>
+                        <div
+                          className='absolute right-4 top-4 h-1.5 w-1.5 animate-bounce rounded-full bg-orange-400'
+                          style={{ animationDelay: '0.5s' }}
+                        ></div>
+                        <div
+                          className='absolute bottom-3 left-6 h-1 w-1 animate-bounce rounded-full bg-yellow-400'
+                          style={{ animationDelay: '1s' }}
+                        ></div>
+                      </div>
+                    </>
+                  }
+                />
               </div>
 
               {/* 错误信息 */}
@@ -10098,7 +10184,7 @@ function PlayPageClient() {
                 <h2 className='text-2xl font-bold text-gray-800 dark:text-gray-200'>
                   哎呀，出现了一些问题
                 </h2>
-                <div className='rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20'>
+                <div className='mtv-err-box rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20'>
                   <p className='font-medium text-red-600 dark:text-red-400'>
                     {error}
                   </p>
@@ -10116,16 +10202,27 @@ function PlayPageClient() {
                       ? router.push(`/search?q=${encodeURIComponent(videoTitle)}`)
                       : router.back()
                   }
-                  className='w-full rounded-xl bg-gradient-to-r from-green-500 to-emerald-600 px-6 py-3 font-medium text-white shadow-lg transition-all duration-200 hover:scale-105 hover:from-green-600 hover:to-emerald-700 hover:shadow-xl'
+                  className='flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-green-500 to-emerald-600 px-6 py-3 font-medium text-white shadow-lg transition-all duration-200 hover:scale-105 hover:from-green-600 hover:to-emerald-700 hover:shadow-xl'
                 >
-                  {videoTitle ? '🔍 返回搜索' : '← 返回上页'}
+                  {videoTitle ? (
+                    <>
+                      <Search className='h-4 w-4 flex-shrink-0' />
+                      返回搜索
+                    </>
+                  ) : (
+                    <>
+                      <ArrowLeft className='h-4 w-4 flex-shrink-0' />
+                      返回上页
+                    </>
+                  )}
                 </button>
 
                 <button
                   onClick={() => window.location.reload()}
-                  className='w-full rounded-xl bg-gray-100 px-6 py-3 font-medium text-gray-700 transition-colors duration-200 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
+                  className='flex w-full items-center justify-center gap-2 rounded-xl bg-gray-100 px-6 py-3 font-medium text-gray-700 transition-colors duration-200 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
                 >
-                  🔄 重新尝试
+                  <RefreshCw className='h-4 w-4 flex-shrink-0' />
+                  重新尝试
                 </button>
               </div>
             </div>
@@ -10430,19 +10527,30 @@ function PlayPageClient() {
                       {videoError ? (
                         // 错误显示
                         <>
-                          {/* 错误图标 */}
-                          <div className='relative mb-8'>
-                            <div className='relative mx-auto w-24 h-24 bg-gradient-to-r from-red-500 to-rose-600 rounded-2xl shadow-2xl flex items-center justify-center'>
-                              <div className='text-white text-4xl'>⚠️</div>
-                            </div>
+                          {/* 错误图标：跟页面级失败态同款，遮罩是深色底所以钉暗色 */}
+                          <div className='relative mb-4 lg:mb-8'>
+                            {/* 失败态款式（旧版那一套各页自备） */}
+                            <LoadingErrorStyle
+                              steps={VIDEO_LOAD_STEPS}
+                              activeStepIdx={videoLoadStepIdx}
+                              message={videoError}
+                              onDark
+                              legacy={
+                                <>
+                                  <div className='relative mx-auto w-24 h-24 bg-gradient-to-r from-red-500 to-rose-600 rounded-2xl shadow-2xl flex items-center justify-center'>
+                                    <div className='text-white text-4xl'>⚠️</div>
+                                  </div>
+                                </>
+                              }
+                            />
                           </div>
 
                           {/* 错误消息 */}
-                          <div className='space-y-4'>
+                          <div className='space-y-2 lg:space-y-4'>
                             <p className='text-xl font-semibold text-white'>
                               播放失败
                             </p>
-                            <p className='text-base text-gray-300'>
+                            <p className='mtv-err-box text-base text-gray-300'>
                               {videoError}
                             </p>
                             <button
@@ -10483,39 +10591,47 @@ function PlayPageClient() {
                           </div>
                         </>
                       ) : (
-                        // 加载显示
-                        <>
-                          {/* 动画影院图标 */}
-                          <div className='relative mb-8'>
-                            <div className='relative mx-auto w-24 h-24 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl shadow-2xl flex items-center justify-center transform hover:scale-105 transition-transform duration-300'>
-                              <div className='text-white text-4xl'>🎬</div>
-                              {/* 旋转光环 */}
-                              <div className='absolute -inset-2 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl opacity-20 animate-spin'></div>
-                            </div>
+                        // 加载显示（三种款式见 components/LoadingStyle）
+                        <LoadingStyle
+                          steps={VIDEO_LOAD_STEPS}
+                          activeStepIdx={videoLoadStepIdx}
+                          message={videoLoadMessage}
+                          onDark
+                          legacy={
+                            <>
+                              {/* 动画影院图标 */}
+                              <div className='relative mb-8'>
+                                <div className='relative mx-auto w-24 h-24 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl shadow-2xl flex items-center justify-center transform hover:scale-105 transition-transform duration-300'>
+                                  <div className='text-white text-4xl'>🎬</div>
+                                  {/* 旋转光环 */}
+                                  <div className='absolute -inset-2 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl opacity-20 animate-spin'></div>
+                                </div>
 
-                            {/* 浮动粒子效果 */}
-                            <div className='absolute top-0 left-0 w-full h-full pointer-events-none'>
-                              <div className='absolute top-2 left-2 w-2 h-2 bg-green-400 rounded-full animate-bounce'></div>
-                              <div
-                                className='absolute top-4 right-4 w-1.5 h-1.5 bg-emerald-400 rounded-full animate-bounce'
-                                style={{ animationDelay: '0.5s' }}
-                              ></div>
-                              <div
-                                className='absolute bottom-3 left-6 w-1 h-1 bg-lime-400 rounded-full animate-bounce'
-                                style={{ animationDelay: '1s' }}
-                              ></div>
-                            </div>
-                          </div>
+                                {/* 浮动粒子效果 */}
+                                <div className='absolute top-0 left-0 w-full h-full pointer-events-none'>
+                                  <div className='absolute top-2 left-2 w-2 h-2 bg-green-400 rounded-full animate-bounce'></div>
+                                  <div
+                                    className='absolute top-4 right-4 w-1.5 h-1.5 bg-emerald-400 rounded-full animate-bounce'
+                                    style={{ animationDelay: '0.5s' }}
+                                  ></div>
+                                  <div
+                                    className='absolute bottom-3 left-6 w-1 h-1 bg-lime-400 rounded-full animate-bounce'
+                                    style={{ animationDelay: '1s' }}
+                                  ></div>
+                                </div>
+                              </div>
 
-                          {/* 换源消息 */}
-                          <div className='space-y-2'>
-                            <p className='text-xl font-semibold text-white animate-pulse'>
-                              {videoLoadingStage === 'sourceChanging'
-                                ? '🔄 切换播放源...'
-                                : '🔄 视频加载中...'}
-                            </p>
-                          </div>
-                        </>
+                              {/* 换源消息 */}
+                              <div className='space-y-2'>
+                                <p className='text-xl font-semibold text-white animate-pulse'>
+                                  {videoLoadingStage === 'sourceChanging'
+                                    ? '🔄 切换播放源...'
+                                    : '🔄 视频加载中...'}
+                                </p>
+                              </div>
+                            </>
+                          }
+                        />
                       )}
                     </div>
                   </div>
