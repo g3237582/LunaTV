@@ -13370,11 +13370,7 @@ const CustomAdFilterConfig = ({
   while (i < lines.length) {
     const line = lines[i];
 
-    // 跳过 #EXT-X-DISCONTINUITY 标识
-    if (line.includes('#EXT-X-DISCONTINUITY')) {
-      i++;
-      continue;
-    }
+    // 保留 #EXT-X-DISCONTINUITY：广告切口/编码重置会改 PTS，剥掉会导致 bufferAppendError 后从 0 重播
 
     // 如果是 EXTINF 行，检查下一行 URL 是否包含广告关键字
     if (line.includes('#EXTINF:')) {

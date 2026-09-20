@@ -8,6 +8,34 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 
 import { isAnimeCategoryText } from '@/lib/anime-keyword-expr';
 import { createAnime4KRenderer } from '@/lib/anime4k';
+import {
+  describeAnime4KEffect,
+  describeAnime4KHud,
+  isFsrMode,
+  parseAnime4KUserScale,
+  parseSuperResMode,
+  resolveAnime4KOutputScale,
+  type Anime4KUserScale,
+} from '@/lib/anime4k-policy';
+import { createFSRRenderer } from '@/lib/fsr';
+import { filterAdsFromM3U8Default } from '@/lib/hls-ad-filter';
+import {
+  createHlsRecoverState,
+  decideHlsMediaRecover,
+  HLS_RECOVER_SKIP_SECONDS,
+  hlsBadSpliceStorageKey,
+  markHlsRecovered,
+  readFailedHlsPlayhead,
+  rememberFailedHlsPlayhead,
+  rememberHlsPlayhead,
+  rememberHlsRecoverState,
+  resolveSafeResumeTime,
+  writeFailedHlsPlayhead,
+} from '@/lib/hls-recover';
+import {
+  resolveHlsStartPosition,
+  resolvePreferredResumeTime,
+} from '@/lib/hls-start-position';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import {
   clearDanmakuCacheByTitle,
@@ -201,6 +229,61 @@ function PlayPageClient() {
   const LOCAL_TRANSCODER_BASE_URL = 'http://localhost:19080';
   const router = useRouter();
   const searchParams = useSearchParams();
+
+  useEffect(() => {
+    const w = window as Window & {
+      __lunatvDecodeSkip?: number;
+      __lunatvSkipAt?: number;
+    };
+    if (w.__lunatvDecodeSkip) {
+      return;
+    }
+    w.__lunatvDecodeSkip = 1;
+    const timer = window.setInterval(() => {
+      const media = document.querySelector('video');
+      if (
+        !media ||
+        !media.error ||
+        media.error.code !== 3 ||
+        !(media.currentTime >= 1)
+      ) {
+        return;
+      }
+      if (w.__lunatvSkipAt && Date.now() - w.__lunatvSkipAt < 2000) {
+        return;
+      }
+      w.__lunatvSkipAt = Date.now();
+      const skipTo = media.currentTime + HLS_RECOVER_SKIP_SECONDS;
+      const liveHls = (media as any).hls;
+      console.log('媒体错误，跳过损坏切口到:', skipTo, 'window.poll');
+      try {
+        if (liveHls) {
+          liveHls.config.startPosition = skipTo;
+          liveHls.recoverMediaError();
+          liveHls.startLoad(skipTo);
+        }
+      } catch {
+        // ignore
+      }
+      try {
+        media.currentTime = skipTo;
+      } catch {
+        // ignore
+      }
+      media.play().catch(() => {
+        // canplay will retry
+      });
+      try {
+        window.localStorage.setItem(
+          `lunatv:hls-bad-splice:${window.location.search}`,
+          String(skipTo - HLS_RECOVER_SKIP_SECONDS)
+        );
+      } catch {
+        // ignore
+      }
+    }, 400);
+    return () => window.clearInterval(timer);
+  }, []);
   const enableComments = useEnableComments();
   const enableAIComments = useEnableAIComments();
   const { addDownloadTask } = useDownload();
@@ -496,25 +579,29 @@ function PlayPageClient() {
 
   // Anime4K超分相关状态
   const [webGPUSupported, setWebGPUSupported] = useState<boolean>(false);
-  const [anime4kEnabled, setAnime4kEnabled] = useState<boolean>(false);
+  const [anime4kEnabled, setAnime4kEnabled] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('enable_anime4k') === 'true';
+    }
+    return false;
+  });
   const [anime4kMode, setAnime4kMode] = useState<string>(() => {
     if (typeof window !== 'undefined') {
-      const v = localStorage.getItem('anime4k_mode');
-      if (v !== null) return v;
+      return parseSuperResMode(localStorage.getItem('anime4k_mode'));
     }
-    return 'ModeA';
+    return 'FSR';
   });
-  const [anime4kScale, setAnime4kScale] = useState<number>(() => {
+  const [anime4kScale, setAnime4kScale] = useState<Anime4KUserScale>(() => {
     if (typeof window !== 'undefined') {
-      const v = localStorage.getItem('anime4k_scale');
-      if (v !== null) return parseFloat(v);
+      return parseAnime4KUserScale(localStorage.getItem('anime4k_scale'));
     }
-    return 2.0;
+    return 'auto';
   });
   const anime4kRef = useRef<any>(null);
   const anime4kEnabledRef = useRef(anime4kEnabled);
   const anime4kModeRef = useRef(anime4kMode);
-  const anime4kScaleRef = useRef(anime4kScale);
+  const anime4kScaleRef = useRef<Anime4KUserScale>(anime4kScale);
+  const anime4kCompareRef = useRef(false);
   useEffect(() => {
     anime4kEnabledRef.current = anime4kEnabled;
     anime4kModeRef.current = anime4kMode;
@@ -1915,6 +2002,11 @@ function PlayPageClient() {
 
   // 用于记录是否需要在播放器 ready 后跳转到指定进度
   const resumeTimeRef = useRef<number | null>(null);
+  // HLS recover / remount 后仍要用的播放头，不能关在 customType 闭包里
+  const hlsPlayheadRef = useRef(0);
+  const hlsFailedPlayheadRef = useRef(0);
+  const hlsDecodeSkipAtRef = useRef(0);
+  const hlsRecoverStateRef = useRef(createHlsRecoverState());
   // 切换鸿蒙 HLS 内核时，同时恢复切换前的播放/暂停状态。
   const resumePlayingAfterHlsModeSwitchRef = useRef<boolean | null>(null);
   // 播放记录跳转按钮状态
@@ -2103,6 +2195,51 @@ function PlayPageClient() {
         : currentFlip === 'vertical'
           ? 'scaleY(-1)'
           : 'none';
+  };
+  const removeAnime4KHud = () => {
+    const hud = anime4kRef.current?.hud as HTMLElement | undefined;
+    hud?.parentNode?.removeChild(hud);
+    if (anime4kRef.current) {
+      anime4kRef.current.hud = null;
+    }
+  };
+  const syncAnime4KHud = (container?: HTMLElement | null) => {
+    const host =
+      container ||
+      (anime4kRef.current?.canvas as HTMLCanvasElement | undefined)?.parentElement ||
+      null;
+    if (!host) return;
+
+    let hud = anime4kRef.current?.hud as HTMLDivElement | undefined;
+    if (!hud) {
+      hud = document.createElement('div');
+      hud.className = 'anime4k-hud';
+      hud.style.position = 'absolute';
+      hud.style.top = '12px';
+      hud.style.left = '12px';
+      hud.style.zIndex = '20';
+      hud.style.padding = '4px 8px';
+      hud.style.borderRadius = '6px';
+      hud.style.background = 'rgba(0, 0, 0, 0.55)';
+      hud.style.color = '#fff';
+      hud.style.fontSize = '12px';
+      hud.style.lineHeight = '1.4';
+      hud.style.pointerEvents = 'none';
+      host.appendChild(hud);
+      if (anime4kRef.current) {
+        anime4kRef.current.hud = hud;
+      }
+    }
+
+    const scale = Number(anime4kRef.current?.scale || 1);
+    const sourceWidth = Number(anime4kRef.current?.sourceWidth || 0);
+    const sourceHeight = Number(anime4kRef.current?.sourceHeight || 0);
+    hud.textContent = describeAnime4KHud(
+      scale,
+      anime4kModeRef.current,
+      anime4kCompareRef.current,
+      sourceWidth && sourceHeight ? { width: sourceWidth, height: sourceHeight } : undefined
+    );
   };
   const customSubtitleInputRef = useRef<HTMLInputElement | null>(null);
   const customSubtitleRef = useRef<CustomSubtitleState | null>(null);
@@ -4222,12 +4359,22 @@ function PlayPageClient() {
         throw new Error('无法获取视频尺寸');
       }
 
-      // 使用用户选择的超分倍数
-      const scale = anime4kScaleRef.current;
+      const container = artPlayerRef.current.template.$video.parentElement as HTMLElement | null;
+      if (!container) {
+        throw new Error('无法找到播放器容器');
+      }
+      const displayHost = (artPlayerRef.current.template.$player || container || video) as HTMLElement;
+      const scale = resolveAnime4KOutputScale({
+        sourceWidth: video.videoWidth,
+        sourceHeight: video.videoHeight,
+        displayWidth: displayHost.clientWidth || video.clientWidth,
+        displayHeight: displayHost.clientHeight || video.clientHeight,
+        devicePixelRatio: window.devicePixelRatio || 1,
+        userScale: anime4kScaleRef.current,
+      });
 
       // 创建输出canvas（显示给用户的）
       outputCanvas = document.createElement('canvas');
-      const container = artPlayerRef.current.template.$video.parentElement;
 
       outputCanvas.width = Math.floor(video.videoWidth * scale); // 确保是整数
       outputCanvas.height = Math.floor(video.videoHeight * scale);
@@ -4247,6 +4394,8 @@ function PlayPageClient() {
       outputCanvas.style.objectFit = 'contain';
       outputCanvas.style.cursor = 'pointer';
       outputCanvas.style.zIndex = '1';
+      // 首帧出来前保持透明，避免初始化期间挡住原片变成黑屏
+      outputCanvas.style.opacity = '0';
       // 确保canvas背景透明，避免Firefox中的渲染问题
       outputCanvas.style.backgroundColor = 'transparent';
 
@@ -4261,68 +4410,81 @@ function PlayPageClient() {
         }
       });
 
-      // 隐藏原始video元素（使用opacity而不是display:none以保持视频解码）
-      // Firefox在display:none时可能会停止视频解码，导致黑屏
-      video.style.opacity = '0';
-      video.style.pointerEvents = 'none';
-      video.style.position = 'absolute';
-      video.style.zIndex = '-1';
-
-      // 插入outputCanvas到容器
+      // 插入outputCanvas到容器。原片先继续显示，等第一帧超分完成再切换。
       container.insertBefore(outputCanvas, video);
 
-      // 动态导入 anime4k-webgpu 及对应的模式
-      const { ModeA, ModeB, ModeC, ModeAA, ModeBB, ModeCA } = await import('anime4k-webgpu');
+      const onFirstFrame = () => {
+        if (!outputCanvas || anime4kCompareRef.current) return;
+        // 隐藏原始video元素（使用opacity而不是display:none以保持视频解码）
+        // Firefox在display:none时可能会停止视频解码，导致黑屏
+        video.style.opacity = '0';
+        video.style.pointerEvents = 'none';
+        video.style.position = 'absolute';
+        video.style.zIndex = '-1';
+        outputCanvas.style.opacity = '1';
+      };
 
-      let ModeClass: any;
       const modeName = anime4kModeRef.current;
-
-      switch (modeName) {
-        case 'ModeA':
-          ModeClass = ModeA;
-          break;
-        case 'ModeB':
-          ModeClass = ModeB;
-          break;
-        case 'ModeC':
-          ModeClass = ModeC;
-          break;
-        case 'ModeAA':
-          ModeClass = ModeAA;
-          break;
-        case 'ModeBB':
-          ModeClass = ModeBB;
-          break;
-        case 'ModeCA':
-          ModeClass = ModeCA;
-          break;
-        default:
-          ModeClass = ModeA;
-      }
-
-      // 使用自管理的 WebGPU 渲染器。内部自动处理各浏览器的帧源差异：
-      // 直接从 <video> 拷贝（Chrome/Edge），或退回 createImageBitmap 中转（Firefox）。
-      console.log('开始初始化Anime4K渲染器...');
+      console.log('开始初始化超分渲染器...', modeName);
       console.log('视频尺寸:', video.videoWidth, 'x', video.videoHeight);
       console.log('输出Canvas尺寸:', outputCanvas.width, 'x', outputCanvas.height);
 
-      const controller = await createAnime4KRenderer({
-        video,
-        canvas: outputCanvas,
-        scale,
-        pipelineClass: ModeClass,
-      });
-      console.log('Anime4K渲染器初始化成功');
+      let controller: { stop: () => void };
+      if (isFsrMode(modeName)) {
+        controller = await createFSRRenderer({
+          video,
+          canvas: outputCanvas,
+          scale,
+          onFirstFrame,
+        });
+      } else {
+        const { ModeA, ModeB, ModeC, ModeAA, ModeBB, ModeCA } = await import('anime4k-webgpu');
+        let ModeClass: any;
+        switch (modeName) {
+          case 'ModeA':
+            ModeClass = ModeA;
+            break;
+          case 'ModeB':
+            ModeClass = ModeB;
+            break;
+          case 'ModeC':
+            ModeClass = ModeC;
+            break;
+          case 'ModeAA':
+            ModeClass = ModeAA;
+            break;
+          case 'ModeBB':
+            ModeClass = ModeBB;
+            break;
+          case 'ModeCA':
+            ModeClass = ModeCA;
+            break;
+          default:
+            ModeClass = ModeA;
+        }
+        controller = await createAnime4KRenderer({
+          video,
+          canvas: outputCanvas,
+          scale,
+          pipelineClass: ModeClass,
+          onFirstFrame,
+        });
+      }
+      console.log('超分渲染器初始化成功');
 
       anime4kRef.current = {
         controller,
         canvas: outputCanvas,
+        scale,
+        sourceWidth: video.videoWidth,
+        sourceHeight: video.videoHeight,
       };
       syncAnime4KCanvasFlip();
+      syncAnime4KHud(container);
 
       console.log('Anime4K超分已启用，模式:', anime4kModeRef.current, '倍数:', scale);
       if (artPlayerRef.current) {
-        artPlayerRef.current.notice.show = `超分已启用 (${anime4kModeRef.current}, ${scale}x)`;
+        artPlayerRef.current.notice.show = describeAnime4KEffect(scale, anime4kModeRef.current);
       }
     } catch (err) {
       console.error('初始化Anime4K失败:', err);
@@ -4352,6 +4514,7 @@ function PlayPageClient() {
         // 停止渲染循环并释放 WebGPU 资源
         anime4kRef.current.controller?.stop?.();
 
+        removeAnime4KHud();
         // 移除canvas
         if (anime4kRef.current.canvas && anime4kRef.current.canvas.parentNode) {
           anime4kRef.current.canvas.parentNode.removeChild(anime4kRef.current.canvas);
@@ -4392,8 +4555,10 @@ function PlayPageClient() {
   // 更改Anime4K模式
   const changeAnime4KMode = async (mode: string) => {
     try {
-      setAnime4kMode(mode);
-      localStorage.setItem('anime4k_mode', mode);
+      const nextMode = parseSuperResMode(mode);
+      anime4kModeRef.current = nextMode;
+      setAnime4kMode(nextMode);
+      localStorage.setItem('anime4k_mode', nextMode);
 
       if (anime4kEnabledRef.current) {
         await cleanupAnime4K();
@@ -4405,10 +4570,10 @@ function PlayPageClient() {
   };
 
   // 更改Anime4K分辨率倍数
-  const changeAnime4KScale = async (scale: number) => {
+  const changeAnime4KScale = async (scale: Anime4KUserScale) => {
     try {
       setAnime4kScale(scale);
-      localStorage.setItem('anime4k_scale', scale.toString());
+      localStorage.setItem('anime4k_scale', String(scale));
 
       if (anime4kEnabledRef.current) {
         await cleanupAnime4K();
@@ -4417,6 +4582,17 @@ function PlayPageClient() {
     } catch (err) {
       console.error('更改超分倍数失败:', err);
     }
+  };
+
+  const setAnime4KCompareOriginal = (compare: boolean) => {
+    anime4kCompareRef.current = compare;
+    const canvas = anime4kRef.current?.canvas as HTMLCanvasElement | undefined;
+    const video = artPlayerRef.current?.video as HTMLVideoElement | undefined;
+    if (!canvas || !video) return;
+    canvas.style.opacity = compare ? '0' : '1';
+    video.style.opacity = compare ? '1' : '0';
+    video.style.zIndex = compare ? '1' : '-1';
+    syncAnime4KHud();
   };
 
   function filterAdsFromM3U8(type: string, m3u8Content: string): string {
@@ -4443,57 +4619,7 @@ function PlayPageClient() {
       }
     }
 
-    // 默认去广告规则
-    if (!m3u8Content) return '';
-
-    // 广告关键字列表
-    const adKeywords = [
-      'sponsor',
-      '/ad/',
-      '/ads/',
-      'advert',
-      'advertisement',
-      '/adjump',
-      'redtraffic'
-    ];
-
-    // 按行分割M3U8内容
-    const lines = m3u8Content.split('\n');
-    const filteredLines = [];
-
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i];
-
-      // 跳过 #EXT-X-DISCONTINUITY 标识
-      if (line.includes('#EXT-X-DISCONTINUITY')) {
-        i++;
-        continue;
-      }
-
-      // 如果是 EXTINF 行，检查下一行 URL 是否包含广告关键字
-      if (line.includes('#EXTINF:')) {
-        // 检查下一行 URL 是否包含广告关键字
-        if (i + 1 < lines.length) {
-          const nextLine = lines[i + 1];
-          const containsAdKeyword = adKeywords.some(keyword =>
-            nextLine.toLowerCase().includes(keyword.toLowerCase())
-          );
-
-          if (containsAdKeyword) {
-            // 跳过 EXTINF 行和 URL 行
-            i += 2;
-            continue;
-          }
-        }
-      }
-
-      // 保留当前行
-      filteredLines.push(line);
-      i++;
-    }
-
-    return filteredLines.join('\n');
+    return filterAdsFromM3U8Default(type, m3u8Content);
   }
 
   // 跳过片头片尾配置相关函数
@@ -5248,6 +5374,20 @@ function PlayPageClient() {
           setCurrentEpisodeIndex(initialIndex);
           currentEpisodeIndexRef.current = initialIndex;
         }
+
+        const spliceKey = hlsBadSpliceStorageKey(
+          detailData.source,
+          detailData.id,
+          initialIndex
+        );
+        hlsFailedPlayheadRef.current = Math.max(
+          hlsFailedPlayheadRef.current,
+          readFailedHlsPlayhead(spliceKey)
+        );
+        resumeTimeRef.current = resolveSafeResumeTime(
+          resumeTimeRef.current,
+          hlsFailedPlayheadRef.current
+        );
       } catch (err) {
         console.error('读取播放记录失败:', err);
       }
@@ -7189,7 +7329,7 @@ function PlayPageClient() {
               try {
                 hls.detachMedia?.();
                 hls.attachMedia?.(video);
-                hls.startLoad?.(-1);
+                hls.startLoad?.(resolveHlsStartPosition(video.currentTime));
                 video.play().catch((error) => {
                   console.warn('[HLS] Safari rescue play failed:', error);
                 });
@@ -7380,7 +7520,9 @@ function PlayPageClient() {
                 enableWorker: true, // WebWorker 解码，降低主线程压力
                 // 点播播放不需要 LL-HLS，小缓冲在 Safari 高倍速下更容易抖动。
                 lowLatencyMode: false,
-                autoStartLoad: true,
+                // 由 MEDIA_ATTACHED / 恢复逻辑显式 startLoad，避免 remount 后
+                // HLS.js 用 media.currentTime=0 自动从片头加载。
+                autoStartLoad: false,
 
                 /* 缓冲/内存相关 - 根据用户设置的缓冲策略动态调整 */
                 maxBufferLength: bufferConfig.maxBufferLength, // 前向缓冲长度
@@ -7391,9 +7533,128 @@ function PlayPageClient() {
                 loader: loaderClass as any,
               });
 
+              let lastHlsMediaTime = hlsPlayheadRef.current;
+              const rememberHlsMediaTime = () => {
+                lastHlsMediaTime = rememberHlsPlayhead(
+                  Math.max(lastHlsMediaTime, hlsPlayheadRef.current),
+                  video.currentTime
+                );
+                hlsPlayheadRef.current = Math.max(
+                  hlsPlayheadRef.current,
+                  lastHlsMediaTime
+                );
+              };
+              video.addEventListener('timeupdate', rememberHlsMediaTime);
+              video.addEventListener('seeking', rememberHlsMediaTime);
+
+              const persistFailedHlsPlayhead = (failedAt: number) => {
+                const remembered = rememberFailedHlsPlayhead(
+                  hlsFailedPlayheadRef.current,
+                  failedAt
+                );
+                if (remembered < 1) {
+                  return 0;
+                }
+                hlsFailedPlayheadRef.current = remembered;
+                writeFailedHlsPlayhead(
+                  hlsBadSpliceStorageKey(
+                    currentSourceRef.current,
+                    currentIdRef.current,
+                    currentEpisodeIndexRef.current
+                  ),
+                  remembered
+                );
+                return remembered;
+              };
+
+              const skipPastBrokenHlsSplice = (reason: string) => {
+                const media =
+                  document.querySelector('video') || hls.media || video;
+                rememberHlsMediaTime();
+                const failedAt = persistFailedHlsPlayhead(
+                  Math.max(
+                    lastHlsMediaTime,
+                    hlsPlayheadRef.current,
+                    hlsFailedPlayheadRef.current,
+                    Number(resumeTimeRef.current) || 0,
+                    Number(media?.currentTime) || 0,
+                    Number(video.currentTime) || 0
+                  )
+                );
+                if (failedAt < 1) {
+                  return -1;
+                }
+                const skipTo = failedAt + HLS_RECOVER_SKIP_SECONDS;
+                lastHlsMediaTime = skipTo;
+                hlsPlayheadRef.current = skipTo;
+                resumeTimeRef.current = skipTo;
+                console.log('媒体错误，跳过损坏切口到:', skipTo, reason);
+                const liveHls = (media as any)?.hls || hls;
+                try {
+                  liveHls.config.startPosition = skipTo;
+                } catch {
+                  // ignore
+                }
+                try {
+                  liveHls.recoverMediaError();
+                } catch {
+                  // ignore
+                }
+                try {
+                  liveHls.startLoad(skipTo);
+                } catch (error) {
+                  console.warn('[HLS] startLoad after decode skip failed:', error);
+                }
+                try {
+                  media.currentTime = skipTo;
+                } catch {
+                  // ignore
+                }
+                media.play().catch(() => {
+                  // autoplay may be blocked; canplay will resume
+                });
+                return skipTo;
+              };
+
+              const unstickIfDecodeFailed = (reason: string) => {
+                const media =
+                  document.querySelector('video') || hls.media || video;
+                const mediaError = media?.error;
+                if (!mediaError || mediaError.code !== 3) {
+                  return;
+                }
+                const now = Date.now();
+                if (
+                  hlsDecodeSkipAtRef.current !== 0 &&
+                  now - hlsDecodeSkipAtRef.current < 2000
+                ) {
+                  return;
+                }
+                hlsDecodeSkipAtRef.current = now;
+                hlsRecoverStateRef.current = markHlsRecovered(
+                  hlsRecoverStateRef.current,
+                  now
+                );
+                skipPastBrokenHlsSplice(reason);
+              };
+
+              video.addEventListener('error', () => {
+                unstickIfDecodeFailed('video.decode');
+              });
+              const decodeWatchdog = window.setInterval(() => {
+                unstickIfDecodeFailed('video.decode.poll');
+              }, 400);
+              hls.on(Hls.Events.DESTROYING, () => {
+                window.clearInterval(decodeWatchdog);
+              });
+
               const kickStartHlsPlayback = () => {
                 try {
-                  hls.startLoad(-1);
+                  hls.startLoad(
+                    resolveHlsStartPosition(
+                      Math.max(lastHlsMediaTime, hlsPlayheadRef.current)
+                    )
+                  );
                 } catch (error) {
                   console.warn('[HLS] startLoad failed:', error);
                 }
@@ -7442,6 +7703,7 @@ function PlayPageClient() {
               // 监听Manifest加载完成事件，启动xiaoya链接定时刷新
               hls.on(Hls.Events.MANIFEST_PARSED, () => {
                 console.log('[HLS] Manifest解析完成');
+                kickStartHlsPlayback();
 
                 const player = artPlayerRef.current;
                 if (video.paused && (player?.option.autoplay || player?.loading)) {
@@ -7468,6 +7730,9 @@ function PlayPageClient() {
 
               hls.on(Hls.Events.ERROR, function (event: any, data: any) {
                 console.error('HLS Error:', event, data);
+                unstickIfDecodeFailed(
+                  data.fatal ? 'hls.fatal.decode' : 'hls.append.decode'
+                );
                 if (data.fatal) {
                   switch (data.type) {
                     case Hls.ErrorTypes.NETWORK_ERROR:
@@ -7518,12 +7783,66 @@ function PlayPageClient() {
                         }
                       }
                       console.log('网络错误，尝试恢复...');
-                      hls.startLoad();
+                      rememberHlsMediaTime();
+                      hls.startLoad(
+                        resolveHlsStartPosition(
+                          Math.max(lastHlsMediaTime, hlsPlayheadRef.current)
+                        )
+                      );
                       break;
-                    case Hls.ErrorTypes.MEDIA_ERROR:
-                      console.log('媒体错误，尝试恢复...');
+                    case Hls.ErrorTypes.MEDIA_ERROR: {
+                      rememberHlsMediaTime();
+                      const now = Date.now();
+                      const recoverState = rememberHlsRecoverState(
+                        hlsRecoverStateRef.current,
+                        lastHlsMediaTime,
+                        now
+                      );
+                      hlsRecoverStateRef.current = recoverState;
+                      const lastPlayhead = Math.max(
+                        lastHlsMediaTime,
+                        hlsPlayheadRef.current,
+                        hlsFailedPlayheadRef.current,
+                        Number(resumeTimeRef.current) || 0,
+                        Number(video.currentTime) || 0
+                      );
+                      const decision = decideHlsMediaRecover({
+                        lastPlayhead,
+                        recoverCountAtPlayhead: recoverState.count,
+                        elapsedSinceLastRecoverMs:
+                          recoverState.lastAt === 0
+                            ? 10_000
+                            : now - recoverState.lastAt,
+                      });
+                      if (decision.action === 'wait') {
+                        console.log('媒体错误，恢复节流中...');
+                        break;
+                      }
+                      hlsRecoverStateRef.current = markHlsRecovered(
+                        recoverState,
+                        now
+                      );
+                      if (decision.action === 'skip') {
+                        persistFailedHlsPlayhead(lastPlayhead);
+                        lastHlsMediaTime = decision.startPosition;
+                        hlsPlayheadRef.current = decision.startPosition;
+                        resumeTimeRef.current = decision.startPosition;
+                        console.log(
+                          '媒体错误，跳过损坏切口到:',
+                          decision.startPosition
+                        );
+                      } else {
+                        console.log('媒体错误，尝试恢复...');
+                      }
+                      try {
+                        hls.config.startPosition = decision.startPosition;
+                      } catch {
+                        // ignore
+                      }
+                      // MediaSource ended 后只能重挂，不能只 startLoad
                       hls.recoverMediaError();
                       break;
+                    }
                     default:
                       console.log('无法恢复的错误');
                       hls.destroy();
@@ -7658,8 +7977,8 @@ function PlayPageClient() {
             }] : []),
             ...(webGPUSupported ? [
               {
-                name: 'Anime4K超分',
-                html: 'Anime4K超分',
+                name: '超分',
+                html: '超分',
                 icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5zm0 18c-4 0-7-3-7-7V9l7-3.5L19 9v4c0 4-3 7-7 7z" fill="#ffffff"/><path d="M10 12l2 2 4-4" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
                 switch: anime4kEnabledRef.current,
                 onSwitch: async function (item: any) {
@@ -7673,32 +7992,37 @@ function PlayPageClient() {
                 html: '超分模式',
                 selector: [
                   {
-                    html: 'ModeA (快速)',
+                    html: 'FSR (真人·推荐)',
+                    value: 'FSR',
+                    default: anime4kModeRef.current === 'FSR',
+                  },
+                  {
+                    html: 'ModeA (动漫·轻度)',
                     value: 'ModeA',
                     default: anime4kModeRef.current === 'ModeA',
                   },
                   {
-                    html: 'ModeB (平衡)',
+                    html: 'ModeB (动漫)',
                     value: 'ModeB',
                     default: anime4kModeRef.current === 'ModeB',
                   },
                   {
-                    html: 'ModeC (质量)',
+                    html: 'ModeC (明显)',
                     value: 'ModeC',
                     default: anime4kModeRef.current === 'ModeC',
                   },
                   {
-                    html: 'ModeAA (增强快速)',
+                    html: 'ModeAA (更明显)',
                     value: 'ModeAA',
                     default: anime4kModeRef.current === 'ModeAA',
                   },
                   {
-                    html: 'ModeBB (增强平衡)',
+                    html: 'ModeBB (增强)',
                     value: 'ModeBB',
                     default: anime4kModeRef.current === 'ModeBB',
                   },
                   {
-                    html: 'ModeCA (最高质量)',
+                    html: 'ModeCA (最强)',
                     value: 'ModeCA',
                     default: anime4kModeRef.current === 'ModeCA',
                   },
@@ -7713,29 +8037,49 @@ function PlayPageClient() {
                 html: '超分倍数',
                 selector: [
                   {
+                    html: '自动(铺满屏幕)',
+                    value: 'auto',
+                    default: anime4kScaleRef.current === 'auto',
+                  },
+                  {
+                    html: '1.0x (只修画质)',
+                    value: '1',
+                    default: anime4kScaleRef.current === 1,
+                  },
+                  {
                     html: '1.5x',
                     value: '1.5',
                     default: anime4kScaleRef.current === 1.5,
                   },
                   {
                     html: '2.0x',
-                    value: '2.0',
-                    default: anime4kScaleRef.current === 2.0,
+                    value: '2',
+                    default: anime4kScaleRef.current === 2,
                   },
                   {
                     html: '3.0x',
-                    value: '3.0',
-                    default: anime4kScaleRef.current === 3.0,
+                    value: '3',
+                    default: anime4kScaleRef.current === 3,
                   },
                   {
                     html: '4.0x',
-                    value: '4.0',
-                    default: anime4kScaleRef.current === 4.0,
+                    value: '4',
+                    default: anime4kScaleRef.current === 4,
                   },
                 ],
                 onSelect: async function (item: any) {
-                  await changeAnime4KScale(parseFloat(item.value));
+                  await changeAnime4KScale(parseAnime4KUserScale(String(item.value)));
                   return item.html;
+                },
+              },
+              {
+                name: '对比原片',
+                html: '对比原片',
+                switch: anime4kCompareRef.current,
+                onSwitch: function (item: any) {
+                  const next = !item.switch;
+                  setAnime4KCompareOriginal(next);
+                  return next;
                 },
               }
             ] : []),
@@ -8501,6 +8845,12 @@ function PlayPageClient() {
           };
 
           applyProgressThumbConfig();
+
+          if (localStorage.getItem('enable_anime4k') === 'true') {
+            setAnime4kEnabled(true);
+            anime4kEnabledRef.current = true;
+            void initAnime4K();
+          }
 
           // 添加字幕切换和本地字幕上传功能；ASS/SSA 需要播放器 ready 后挂载 JASSUB
           const readySubtitles = (detailRef.current?.subtitles?.[currentEpisodeIndexRef.current] || []) as SourceSubtitleItem[];
@@ -9268,16 +9618,80 @@ function PlayPageClient() {
           let restoredResumeTime = false;
 
           // 若存在需要恢复的播放进度，则跳转
-          if (resumeTimeRef.current && resumeTimeRef.current > 0) {
+          const preferredResumeTime = resolveSafeResumeTime(
+            resolvePreferredResumeTime(
+              resumeTimeRef.current,
+              hlsPlayheadRef.current,
+              Number(artPlayerRef.current.currentTime) || 0
+            ),
+            hlsFailedPlayheadRef.current
+          );
+          if (preferredResumeTime && preferredResumeTime > 0) {
             try {
               const duration = artPlayerRef.current.duration || 0;
-              let target = resumeTimeRef.current;
+              let target = preferredResumeTime;
               if (duration && target >= duration - 2) {
                 target = Math.max(0, duration - 5);
               }
               artPlayerRef.current.currentTime = target;
+              hlsPlayheadRef.current = target;
               restoredResumeTime = true;
-              console.log('成功恢复播放进度到:', resumeTimeRef.current);
+              console.log('成功恢复播放进度到:', target);
+              schedulePlayerTimeout(() => {
+                const player = artPlayerRef.current;
+                const media =
+                  document.querySelector('video') ||
+                  player?.video ||
+                  player?.template?.$video;
+                if (!media || target < 1) {
+                  return;
+                }
+                const decodeFailed = Boolean(
+                  media.error && media.error.code === 3
+                );
+                const stuckOnResume =
+                  Number.isFinite(media.currentTime) &&
+                  Math.abs(media.currentTime - target) < 1.5 &&
+                  media.readyState < 2;
+                if (!decodeFailed && !stuckOnResume) {
+                  return;
+                }
+                const failedAt = rememberFailedHlsPlayhead(
+                  hlsFailedPlayheadRef.current,
+                  Math.max(target, Number(media.currentTime) || 0)
+                );
+                hlsFailedPlayheadRef.current = failedAt;
+                writeFailedHlsPlayhead(
+                  hlsBadSpliceStorageKey(
+                    currentSourceRef.current,
+                    currentIdRef.current,
+                    currentEpisodeIndexRef.current
+                  ),
+                  failedAt
+                );
+                const skipTo = failedAt + HLS_RECOVER_SKIP_SECONDS;
+                hlsPlayheadRef.current = skipTo;
+                resumeTimeRef.current = skipTo;
+                console.log('媒体错误，跳过损坏切口到:', skipTo, 'canplay.watchdog');
+                try {
+                  const attachedHls = (media as any).hls;
+                  if (attachedHls) {
+                    attachedHls.config.startPosition = skipTo;
+                    try {
+                      attachedHls.recoverMediaError();
+                    } catch {
+                      // ignore
+                    }
+                    attachedHls.startLoad(skipTo);
+                  }
+                  player.currentTime = skipTo;
+                  Promise.resolve(player.play()).catch(() => {
+                    // canplay will retry
+                  });
+                } catch (error) {
+                  console.warn('跳过损坏切口失败:', error);
+                }
+              }, 1200);
             } catch (err) {
               console.warn('恢复播放进度失败:', err);
             }

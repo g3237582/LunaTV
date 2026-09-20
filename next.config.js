@@ -50,7 +50,7 @@ const createNextConfig = (phase) => {
   experimental: {
     instrumentationHook: process.env.NODE_ENV === 'production' && !isEdgeBuild,
     optimizePackageImports: optimizedPackageImports,
-    webpackBuildWorker: !isEdgeBuild,
+    webpackBuildWorker: process.env.NEXT_DISABLE_WEBPACK_BUILD_WORKER === '1' ? false : !isEdgeBuild,
     // Next 14.2 仍可能读取此字段；与 serverExternalPackages 保持一致
     serverComponentsExternalPackages: [
       '@libsql/client',

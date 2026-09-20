@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getConfig } from '@/lib/config';
+import { filterAdsFromM3U8Default } from '@/lib/hls-ad-filter';
 import { validateProxyUrlServerSide } from '@/lib/server/ssrf';
 
 export const runtime = 'nodejs';
@@ -201,65 +202,6 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
-}
-
-/**
- * 默认去广告规则（服务端版本）
- * 注意：前端 page.tsx 中的 filterAdsFromM3U8 是客户端侧的去广告逻辑（用于直连模式下由 HLS.js 的自定义 loader 拦截）。
- * 本函数用于代理模式下，在服务端对 m3u8 内容进行去广告处理后再返回给客户端。
- * 两套逻辑需要保持同步更新。
- */
-function filterAdsFromM3U8Default(type: string, m3u8Content: string): string {
-  if (!m3u8Content) return '';
-
-  // 广告关键字列表
-  const adKeywords = [
-    'sponsor',
-    '/ad/',
-    '/ads/',
-    'advert',
-    'advertisement',
-    '/adjump',
-    'redtraffic'
-  ];
-
-  // 按行分割M3U8内容
-  const lines = m3u8Content.split('\n');
-  const filteredLines = [];
-
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // 跳过 #EXT-X-DISCONTINUITY 标识
-    if (line.includes('#EXT-X-DISCONTINUITY')) {
-      i++;
-      continue;
-    }
-
-    // 如果是 EXTINF 行，检查下一行 URL 是否包含广告关键字
-    if (line.includes('#EXTINF:')) {
-      // 检查下一行 URL 是否包含广告关键字
-      if (i + 1 < lines.length) {
-        const nextLine = lines[i + 1];
-        const containsAdKeyword = adKeywords.some(keyword =>
-          nextLine.toLowerCase().includes(keyword.toLowerCase())
-        );
-
-        if (containsAdKeyword) {
-          // 跳过 EXTINF 行和 URL 行
-          i += 2;
-          continue;
-        }
-      }
-    }
-
-    // 保留当前行
-    filteredLines.push(line);
-    i++;
-  }
-
-  return filteredLines.join('\n');
 }
 
 /**

@@ -3,6 +3,8 @@
 import { Loader2, Pause, Play } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import { filterAdsFromM3U8Default } from '@/lib/hls-ad-filter';
+
 declare global {
   interface HTMLVideoElement {
     hls?: any;
@@ -24,31 +26,7 @@ function getSourceType(url: string, explicitType?: SourceType): SourceType {
 }
 
 function filterAdsFromM3U8(m3u8Content: string): string {
-  if (!m3u8Content) return '';
-  const adKeywords = ['sponsor', '/ad/', '/ads/', 'advert', 'advertisement', '/adjump', 'redtraffic'];
-  const lines = m3u8Content.split('\n');
-  const filteredLines: string[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-    if (line.includes('#EXT-X-DISCONTINUITY')) {
-      i++;
-      continue;
-    }
-    if (line.includes('#EXTINF:') && i + 1 < lines.length) {
-      const nextLine = lines[i + 1];
-      const isAd = adKeywords.some((keyword) => nextLine.toLowerCase().includes(keyword));
-      if (isAd) {
-        i += 2;
-        continue;
-      }
-    }
-    filteredLines.push(line);
-    i++;
-  }
-
-  return filteredLines.join('\n');
+  return filterAdsFromM3U8Default('m3u8', m3u8Content);
 }
 
 export default function TVNativeVideo({

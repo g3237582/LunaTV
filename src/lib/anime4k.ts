@@ -7,6 +7,8 @@
 // canCopyExternalImageToTexture() 探测；探测失败则退回 createImageBitmap(video) 路径。
 import type { Anime4KPipeline } from 'anime4k-webgpu';
 
+import { canProcessAnime4KVideoFrame } from '@/lib/anime4k-policy';
+
 export interface Anime4KModeConstructor {
   new (args: {
     device: GPUDevice;
@@ -23,6 +25,8 @@ export interface Anime4KRendererOptions {
   scale: number;
   /** Anime4K 模式类，如 anime4k-webgpu 的 ModeA / ModeB ... */
   pipelineClass: Anime4KModeConstructor;
+  /** 第一帧成功提交后再隐藏原片，避免初始化期间黑屏 */
+  onFirstFrame?: () => void;
 }
 
 export interface Anime4KController {
@@ -117,7 +121,7 @@ async function canCopyExternalImageToTexture(): Promise<boolean> {
 export async function createAnime4KRenderer(
   options: Anime4KRendererOptions
 ): Promise<Anime4KController> {
-  const { video, canvas, scale, pipelineClass } = options;
+  const { video, canvas, scale, pipelineClass, onFirstFrame } = options;
 
   const srcW = video.videoWidth;
   const srcH = video.videoHeight;
@@ -208,8 +212,9 @@ export async function createAnime4KRenderer(
   let destroyed = false;
   let rafId = 0;
 
+  let firstFrameNotified = false;
   const copyCurrentFrame = async (): Promise<boolean> => {
-    if (destroyed || video.readyState < video.HAVE_CURRENT_DATA || video.paused) {
+    if (destroyed || !canProcessAnime4KVideoFrame(video)) {
       return false;
     }
 
@@ -249,6 +254,11 @@ export async function createAnime4KRenderer(
     pass.draw(6);
     pass.end();
     device.queue.submit([encoder.finish()]);
+
+    if (!firstFrameNotified) {
+      firstFrameNotified = true;
+      onFirstFrame?.();
+    }
 
     return true;
   };
