@@ -7,6 +7,8 @@ import { deleteMangaShelf, getAllMangaShelf, subscribeToDataUpdates } from '@/li
 import { MangaShelfItem } from '@/lib/manga.types';
 
 import MangaCard from '@/components/MangaCard';
+import MusicPaginationBar from '@/components/music/MusicPaginationBar';
+import { sliceMusicPage } from '@/lib/music-page-data';
 
 function MangaShelfSkeleton() {
   return (
@@ -30,6 +32,7 @@ function MangaShelfSkeleton() {
 export default function MangaShelfPage() {
   const [shelf, setShelf] = useState<Record<string, MangaShelfItem>>({});
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     const unsubscribe = subscribeToDataUpdates<Record<string, MangaShelfItem>>(
@@ -49,6 +52,7 @@ export default function MangaShelfPage() {
     () => Object.entries(shelf).sort(([, a], [, b]) => b.saveTime - a.saveTime),
     [shelf]
   );
+  const pagedShelf = sliceMusicPage(shelfList, page);
 
   const removeItem = async (sourceId: string, mangaId: string) => {
     const key = `${sourceId}+${mangaId}`;
@@ -73,7 +77,7 @@ export default function MangaShelfPage() {
         </div>
       ) : (
         <div className='grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-6'>
-          {shelfList.map(([key, item]) => (
+          {pagedShelf.items.map(([key, item]) => (
             <div key={key} className='space-y-2'>
               <MangaCard
                 item={item}
@@ -95,6 +99,11 @@ export default function MangaShelfPage() {
           ))}
         </div>
       )}
+      <MusicPaginationBar
+        totalItems={shelfList.length}
+        page={pagedShelf.page}
+        onPageChanged={setPage}
+      />
     </section>
   );
 }

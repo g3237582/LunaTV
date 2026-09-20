@@ -4,6 +4,15 @@ import { createHash } from 'crypto';
 
 import { getConfig } from './config';
 import {
+  fetchAdultSourceHtml,
+  isAdultChapterId,
+  parseAdultChapterId,
+  parseDirectChapterImages,
+  parseSourceChapters,
+  resolveSourcePageUrl,
+} from './manga-adult-unlock';
+import { AGE_GATE_MESSAGE, isAgeGateError } from './manga-error';
+import {
   MangaChapter,
   MangaDetail,
   MangaRecommendResult,
@@ -697,7 +706,184 @@ export class SuwayomiClient {
     };
   }
 
+  async confirmAdultAndGetDetail(input: {
+    mangaId: string;
+    sourceId: string;
+    title?: string;
+    cover?: string;
+    sourceName?: string;
+    description?: string;
+    author?: string;
+    status?: string;
+  }): Promise<MangaDetail> {
+    await this.enableAdultSourcePreferences(input.sourceId);
+    await this.markMangaAdultConfirmed(input.mangaId);
+    try {
+      return await this.getMangaDetail(input);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error || '');
+      if (!isAgeGateError(message)) {
+        throw error;
+      }
+      return this.getMangaDetailFromAdultSource(input);
+    }
+  }
+
+  private async getMangaSourceUrl(mangaId: string): Promise<string> {
+    const queries: Array<{ query: string; variables: Record<string, string | number> }> = [
+      {
+        query: `
+          query MangaSourceUrl($id: Int!) {
+            manga(id: $id) { url realUrl }
+          }
+        `,
+        variables: { id: Number(mangaId) },
+      },
+      {
+        query: `
+          query MangaSourceUrl($id: LongString!) {
+            manga(id: $id) { url realUrl }
+          }
+        `,
+        variables: { id: mangaId },
+      },
+    ];
+
+    for (const item of queries) {
+      try {
+        const data = await this.graphqlRequest<{
+          manga?: { url?: string; realUrl?: string };
+        }>(item.query, item.variables, 'MangaSourceUrl');
+        if (data.manga?.realUrl) return data.manga.realUrl;
+        if (data.manga?.url?.startsWith('http')) return data.manga.url;
+        if (data.manga?.url) return `https://www.dm5.com${data.manga.url.startsWith('/') ? '' : '/'}${data.manga.url}`;
+      } catch {
+        // 兼容不同 Suwayomi 的 manga(id) 标量
+      }
+    }
+    throw new Error('无法定位漫画源站地址');
+  }
+
+  private async getMangaDetailFromAdultSource(input: {
+    mangaId: string;
+    sourceId: string;
+    title?: string;
+    cover?: string;
+    sourceName?: string;
+    description?: string;
+    author?: string;
+    status?: string;
+  }): Promise<MangaDetail> {
+    const sourceUrl = await this.getMangaSourceUrl(input.mangaId);
+    const html = await fetchAdultSourceHtml(sourceUrl);
+    const chapters = parseSourceChapters(html, input.mangaId);
+    if (!chapters.length) {
+      throw new Error(AGE_GATE_MESSAGE);
+    }
+
+    return {
+      id: input.mangaId,
+      sourceId: input.sourceId,
+      sourceName: input.sourceName || input.sourceId,
+      title: input.title || '漫画详情',
+      cover: input.cover || '',
+      description: input.description,
+      author: input.author,
+      status: input.status,
+      chapters,
+    };
+  }
+
+  private async enableAdultSourcePreferences(sourceId: string): Promise<void> {
+    const query = `
+      query SourcePreferences($id: LongString!) {
+        source(id: $id) {
+          preferences {
+            __typename
+            ... on SwitchPreference { key title summary }
+            ... on CheckBoxPreference { key title summary }
+            ... on ListPreference { key title summary }
+            ... on EditTextPreference { key title summary }
+          }
+        }
+      }
+    `;
+    try {
+      const data = await this.graphqlRequest<{
+        source?: {
+          preferences?: Array<{
+            __typename?: string;
+            key?: string;
+            title?: string;
+            summary?: string;
+          }>;
+        };
+      }>(query, { id: sourceId }, 'SourcePreferences');
+      const prefs = data.source?.preferences || [];
+      const adultLike = /成人|限制|r18|18\+|adult|nsfw|mature|色情|未成年/i;
+      for (let position = 0; position < prefs.length; position += 1) {
+        const pref = prefs[position];
+        const haystack = `${pref.key || ''} ${pref.title || ''} ${pref.summary || ''}`;
+        if (!adultLike.test(haystack)) continue;
+        const change =
+          pref.__typename === 'CheckBoxPreference'
+            ? { position, checkBoxState: true }
+            : { position, switchState: true };
+        await this.graphqlRequest(
+          `
+            mutation UpdateSourcePreference($input: UpdateSourcePreferenceInput!) {
+              updateSourcePreference(input: $input) { clientMutationId }
+            }
+          `,
+          { input: { source: sourceId, change } },
+          'UpdateSourcePreference'
+        );
+      }
+    } catch {
+      // 源没有偏好项或旧版 schema 时，仍继续回拉目录
+    }
+  }
+
+  private async markMangaAdultConfirmed(mangaId: string): Promise<void> {
+    try {
+      await this.graphqlRequest(
+        `
+          mutation SetMangaMeta($input: SetMangaMetaInput!) {
+            setMangaMeta(input: $input) { clientMutationId }
+          }
+        `,
+        {
+          input: {
+            meta: {
+              mangaId: Number(mangaId),
+              key: 'adultConfirmed',
+              value: 'true',
+            },
+          },
+        },
+        'SetMangaMeta'
+      );
+    } catch {
+      // meta 写入失败不阻断确认后的章节重拉
+    }
+  }
+
   async getChapterPages(chapterId: string): Promise<string[]> {
+    if (isAdultChapterId(chapterId)) {
+      const parsed = parseAdultChapterId(chapterId);
+      if (!parsed) {
+        throw new Error('无效的确认章节');
+      }
+      const sourceUrl = await this.getMangaSourceUrl(parsed.mangaId);
+      const pageUrl = resolveSourcePageUrl(sourceUrl, parsed.url);
+      const html = await fetchAdultSourceHtml(pageUrl);
+      const images = parseDirectChapterImages(html, pageUrl);
+      if (!images.length) {
+        throw new Error('目录已解锁，但该章节图片仍被源站拦截');
+      }
+      return images;
+    }
+
     const mutation = `
       mutation GET_CHAPTER_PAGES_FETCH($input: FetchChapterPagesInput!) {
         fetchChapterPages(input: $input) {

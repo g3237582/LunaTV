@@ -7,6 +7,8 @@ import { deleteMangaReadRecord, deleteMangaShelf, getAllMangaReadRecords, getAll
 import { MangaReadRecord, MangaShelfItem } from '@/lib/manga.types';
 
 import MangaHistoryCard from '@/components/manga/MangaHistoryCard';
+import MusicPaginationBar from '@/components/music/MusicPaginationBar';
+import { sliceMusicPage } from '@/lib/music-page-data';
 
 function MangaHistorySkeleton() {
   return (
@@ -28,15 +30,10 @@ export default function MangaHistoryPage() {
   const [history, setHistory] = useState<Record<string, MangaReadRecord>>({});
   const [loading, setLoading] = useState(true);
   const [shelf, setShelf] = useState<Record<string, MangaShelfItem>>({});
-  const [displayAll, setDisplayAll] = useState(false);
+  const [page, setPage] = useState(1);
 
   const updateHistory = (nextHistory: Record<string, MangaReadRecord>) => {
-    const sortedCount = Object.keys(nextHistory).length;
     setHistory(nextHistory);
-    setDisplayAll(sortedCount <= 10);
-    if (sortedCount > 10) {
-      setTimeout(() => setDisplayAll(true), 0);
-    }
   };
 
   useEffect(() => {
@@ -67,10 +64,7 @@ export default function MangaHistoryPage() {
     () => Object.entries(history).sort(([, a], [, b]) => b.saveTime - a.saveTime),
     [history]
   );
-  const visibleHistoryList = useMemo(
-    () => (displayAll ? historyList : historyList.slice(0, 10)),
-    [displayAll, historyList]
-  );
+  const pagedHistory = sliceMusicPage(historyList, page);
 
 
   const toggleShelf = async (item: MangaReadRecord) => {
@@ -123,7 +117,7 @@ export default function MangaHistoryPage() {
         </div>
       ) : (
         <div className='grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-6'>
-          {visibleHistoryList.map(([key, item]) => (
+          {pagedHistory.items.map(([key, item]) => (
             <MangaHistoryCard
               key={key}
               item={item}
@@ -134,6 +128,11 @@ export default function MangaHistoryPage() {
           ))}
         </div>
       )}
+      <MusicPaginationBar
+        totalItems={historyList.length}
+        page={pagedHistory.page}
+        onPageChanged={setPage}
+      />
     </section>
   );
 }

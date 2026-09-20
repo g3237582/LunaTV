@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { mangaErrorPayload } from '@/lib/manga-error';
 import { suwayomiClient } from '@/lib/suwayomi.client';
 
 import { getAuthorizedUsername } from '../_utils';
@@ -19,7 +20,10 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: '缺少 mangaId 或 sourceId' }, { status: 400 });
     }
 
-    const detail = await suwayomiClient.getMangaDetail({
+    const confirmAdult =
+      searchParams.get('confirmAdult') === '1' ||
+      searchParams.get('confirmAdult') === 'true';
+    const input = {
       mangaId,
       sourceId,
       title: searchParams.get('title') || undefined,
@@ -28,10 +32,14 @@ export async function GET(request: NextRequest) {
       description: searchParams.get('description') || undefined,
       author: searchParams.get('author') || undefined,
       status: searchParams.get('status') || undefined,
-    });
+    };
+    const detail = confirmAdult
+      ? await suwayomiClient.confirmAdultAndGetDetail(input)
+      : await suwayomiClient.getMangaDetail(input);
 
     return NextResponse.json(detail);
   } catch (error) {
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+    const payload = mangaErrorPayload(error);
+    return NextResponse.json(payload, { status: payload.action ? 403 : 500 });
   }
 }

@@ -1,4 +1,4 @@
-export const MUSIC_DISCOVERY_TIMEOUT_MS = 8000;
+export const MUSIC_DISCOVERY_TIMEOUT_MS = 20000;
 export const MUSIC_DISCOVERY_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export function isLxTransportError(error: unknown): boolean {

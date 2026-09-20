@@ -2,7 +2,7 @@
 
 import { Flame, Sparkles } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { deleteMangaShelf, getAllMangaShelf, saveMangaShelf } from '@/lib/db.client';
 import {
@@ -15,6 +15,8 @@ import {
 
 import CapsuleSwitch from '@/components/CapsuleSwitch';
 import MangaCard from '@/components/MangaCard';
+import MusicPaginationBar from '@/components/music/MusicPaginationBar';
+import { loadInParallel, nextPrefetchPages } from '@/lib/music-page-data';
 
 function MangaCardSkeleton({ withButton = false }: { withButton?: boolean }) {
   return (
@@ -43,7 +45,6 @@ export default function MangaRecommendPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
   const [shelf, setShelf] = useState<Record<string, MangaShelfItem>>({});
-  const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (typeof window !== 'undefined' && !(window as any).RUNTIME_CONFIG?.SUWAYOMI_ENABLED) {
@@ -60,16 +61,18 @@ export default function MangaRecommendPage() {
   }, [router, searchParams]);
 
   useEffect(() => {
-    fetch('/api/manga/sources')
-      .then((res) => res.json())
-      .then((data) => {
-        const nextSources = data.sources || [];
-        setSources(nextSources);
-        setSourceId((prev) => prev || nextSources[0]?.id || '');
-      })
-      .catch(() => undefined);
-
-    getAllMangaShelf().then(setShelf).catch(() => undefined);
+    void loadInParallel({
+      sources: async () => {
+        const res = await fetch('/api/manga/sources');
+        return res.json();
+      },
+      shelf: () => getAllMangaShelf(),
+    }).then((result) => {
+      const nextSources = (result.sources as { sources?: MangaSource[] } | null)?.sources || [];
+      setSources(nextSources);
+      setSourceId((prev) => prev || nextSources[0]?.id || '');
+      if (result.shelf) setShelf(result.shelf);
+    });
   }, []);
 
   const fetchRecommend = useCallback(async (nextPage: number, append: boolean) => {
@@ -93,10 +96,20 @@ export default function MangaRecommendPage() {
       if (!res.ok) throw new Error(data.error || '获取推荐失败');
 
       setPage(nextPage);
-      setResult((prev) => ({
-        mangas: append ? [...prev.mangas, ...data.mangas] : data.mangas,
+      setResult({
+        mangas: data.mangas,
         hasNextPage: data.hasNextPage,
-      }));
+      });
+      if (data.hasNextPage) {
+        nextPrefetchPages(nextPage, nextPage + 1).forEach((prefetchPage) => {
+          const prefetch = new URLSearchParams({
+            sourceId,
+            type: recommendType,
+            page: String(prefetchPage),
+          });
+          void fetch(`/api/manga/recommend?${prefetch.toString()}`);
+        });
+      }
     } catch (err) {
       setError((err as Error).message);
       if (!append) {
@@ -112,25 +125,6 @@ export default function MangaRecommendPage() {
     if (!sourceId) return;
     void fetchRecommend(1, false);
   }, [fetchRecommend, sourceId]);
-
-  useEffect(() => {
-    const node = loadMoreRef.current;
-    if (!node || loading || loadingMore || !result.hasNextPage) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        if (!entry?.isIntersecting || loadingMore || loading || !result.hasNextPage) return;
-        void fetchRecommend(page + 1, true);
-      },
-      {
-        rootMargin: '240px 0px',
-      }
-    );
-
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [fetchRecommend, loading, loadingMore, page, result.hasNextPage]);
 
   const sourceOptions = useMemo(
     () =>
@@ -238,9 +232,14 @@ export default function MangaRecommendPage() {
               })}
             </div>
 
-            <div ref={loadMoreRef} className='mt-6 flex min-h-10 items-center justify-center text-sm text-gray-500 dark:text-gray-400'>
-              {loadingMore ? '正在加载更多...' : result.hasNextPage ? '继续下滑加载更多' : '没有更多了'}
-            </div>
+            {loadingMore ? (
+              <div className='mt-6 text-center text-sm text-gray-500'>正在加载...</div>
+            ) : null}
+            <MusicPaginationBar
+              page={page}
+              hasMore={result.hasNextPage}
+              onPageChanged={(next) => void fetchRecommend(next, false)}
+            />
           </>
         )}
       </section>

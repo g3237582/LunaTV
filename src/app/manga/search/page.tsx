@@ -8,6 +8,8 @@ import { deleteMangaShelf, getAllMangaShelf, saveMangaShelf } from '@/lib/db.cli
 import { MangaSearchItem, MangaShelfItem, MangaSource } from '@/lib/manga.types';
 
 import MangaCard from '@/components/MangaCard';
+import MusicPaginationBar from '@/components/music/MusicPaginationBar';
+import { loadInParallel, sliceMusicPage } from '@/lib/music-page-data';
 
 const MANGA_SEARCH_STATE_KEY = 'manga_search_state';
 
@@ -51,6 +53,7 @@ export default function MangaSearchPage() {
   const [totalSources, setTotalSources] = useState(0);
   const [completedSources, setCompletedSources] = useState(0);
   const [useFluidSearch, setUseFluidSearch] = useState(true);
+  const [page, setPage] = useState(1);
 
   const getCacheKey = useCallback((keyword: string, selectedSourceId: string) => {
     return `manga_search_cache_${selectedSourceId || 'all'}_${keyword.trim()}`;
@@ -155,12 +158,16 @@ export default function MangaSearchPage() {
   useEffect(() => {
     setUseFluidSearch(readFluidSearchSetting());
 
-    fetch('/api/manga/sources')
-      .then((res) => res.json())
-      .then((data) => setSources(data.sources || []))
-      .catch(() => undefined);
-
-    getAllMangaShelf().then(setShelf).catch(() => undefined);
+    void loadInParallel({
+      sources: async () => {
+        const res = await fetch('/api/manga/sources');
+        return res.json();
+      },
+      shelf: () => getAllMangaShelf(),
+    }).then((result) => {
+      setSources((result.sources as { sources?: MangaSource[] } | null)?.sources || []);
+      if (result.shelf) setShelf(result.shelf);
+    });
 
     return () => {
       closeEventSource();
@@ -183,6 +190,7 @@ export default function MangaSearchPage() {
       setLoading(true);
       setError('');
       setHasSearched(true);
+      setPage(1);
       setLastSearchedQuery(trimmedQuery);
       setLastSearchedSourceId(normalizedSourceId);
       setTotalSources(0);
@@ -461,7 +469,7 @@ export default function MangaSearchPage() {
           </div>
         ) : (
           <div className='grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-6'>
-            {results.map((item) => {
+            {sliceMusicPage(results, page).items.map((item) => {
               const key = `${item.sourceId}+${item.id}`;
               return (
                 <div key={key} className='space-y-2'>
@@ -481,6 +489,11 @@ export default function MangaSearchPage() {
             })}
           </div>
         )}
+        <MusicPaginationBar
+          totalItems={results.length}
+          page={page}
+          onPageChanged={setPage}
+        />
       </section>
     </div>
   );
