@@ -26,6 +26,8 @@ import {
 } from '@/lib/book-route-cache.client';
 
 import BookCard from '@/components/books/BookCard';
+import MusicPaginationBar from '@/components/music/MusicPaginationBar';
+import { sliceMusicPage } from '@/lib/music-page-data';
 
 type RuntimeWindow = Window & { RUNTIME_CONFIG?: { FLUID_SEARCH?: boolean } };
 
@@ -72,6 +74,7 @@ export default function BooksSearchPage() {
   const [totalSources, setTotalSources] = useState(0);
   const [completedSources, setCompletedSources] = useState(0);
   const [useFluidSearch, setUseFluidSearch] = useState(true);
+  const [page, setPage] = useState(1);
 
   const restoredRef = useRef(false);
   const forceNextUrlSearchRef = useRef(false);
@@ -218,6 +221,7 @@ export default function BooksSearchPage() {
       setLoading(true);
       setError('');
       setHasSearched(true);
+      setPage(1);
       setTotalSources(0);
       setCompletedSources(0);
 
@@ -665,7 +669,7 @@ export default function BooksSearchPage() {
         </div>
       ) : null}
       <section className='grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-6'>
-        {result.results.map((item) => (
+        {sliceMusicPage(result.results, page).items.map((item) => (
           <BookCard
             key={`${item.sourceId}-${item.id}`}
             item={item}
@@ -674,6 +678,11 @@ export default function BooksSearchPage() {
           />
         ))}
       </section>
+      <MusicPaginationBar
+        totalItems={result.results.length}
+        page={page}
+        onPageChanged={setPage}
+      />
       {!loading && hasSearched && !error && result.results.length === 0 ? (
         <div className='rounded-[2rem] border border-dashed border-emerald-200 bg-white/75 p-8 text-center shadow-sm dark:border-emerald-500/20 dark:bg-gray-950/50'>
           <div className='mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-200'>

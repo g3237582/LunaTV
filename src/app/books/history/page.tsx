@@ -13,6 +13,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import BookCover from '@/components/books/BookCover';
 import {
   deleteBookReadRecord,
   getAllBookReadRecords,
@@ -31,6 +32,8 @@ import {
   cacheBookShelfItem,
 } from '@/lib/book-route-cache.client';
 import { subscribeToDataUpdates } from '@/lib/db.client';
+import MusicPaginationBar from '@/components/music/MusicPaginationBar';
+import { sliceMusicPage } from '@/lib/music-page-data';
 
 function looksLikeInternalHref(value?: string) {
   if (!value) return false;
@@ -95,15 +98,10 @@ export default function BookHistoryPage() {
     key?: string;
     title?: string;
   } | null>(null);
-  const [displayAll, setDisplayAll] = useState(false);
+  const [page, setPage] = useState(1);
 
   const updateRecords = (nextRecords: Record<string, BookReadRecord>) => {
-    const count = Object.keys(nextRecords).length;
     setRecords(nextRecords);
-    setDisplayAll(count <= 10);
-    if (count > 10) {
-      setTimeout(() => setDisplayAll(true), 0);
-    }
   };
 
   useEffect(() => {
@@ -114,13 +112,13 @@ export default function BookHistoryPage() {
       setLoading(false);
     }
 
-    getAllBookReadRecords()
-      .then(updateRecords)
+    Promise.all([getAllBookReadRecords(), getAllBookShelf()])
+      .then(([nextRecords, nextShelf]) => {
+        updateRecords(nextRecords);
+        setShelf(nextShelf);
+      })
       .catch(() => undefined)
       .finally(() => setLoading(false));
-    getAllBookShelf()
-      .then(setShelf)
-      .catch(() => undefined);
 
     const unsubscribeHistory = subscribeToDataUpdates<
       Record<string, BookReadRecord>
@@ -165,10 +163,7 @@ export default function BookHistoryPage() {
         .sort((a, b) => b.saveTime - a.saveTime),
     [records, shelf]
   );
-  const visibleItems = useMemo(
-    () => (displayAll ? items : items.slice(0, 10)),
-    [displayAll, items]
-  );
+  const paged = sliceMusicPage(items, page);
 
   const cacheTotalSize = useMemo(
     () => cacheItems.reduce((sum, item) => sum + item.size, 0),
@@ -207,25 +202,14 @@ export default function BookHistoryPage() {
       {loading ? (
         <BookHistorySkeleton />
       ) : (
-        visibleItems.map((item) => (
+        paged.items.map((item) => (
           <article
             key={item.storageKey}
             className='rounded-[2rem] border border-emerald-100/80 bg-white/85 p-4 shadow-sm shadow-emerald-950/5 transition-colors duration-200 hover:border-emerald-200 hover:bg-white dark:border-emerald-500/10 dark:bg-gray-950/70 dark:hover:border-emerald-500/30'
           >
             <div className='flex gap-4'>
               <div className='h-28 w-20 shrink-0 overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-50 to-lime-50 ring-1 ring-emerald-100 dark:from-gray-900 dark:to-emerald-950/20 dark:ring-emerald-500/10'>
-                {item.cover ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={item.cover}
-                    alt={item.title}
-                    className='h-full w-full object-cover'
-                  />
-                ) : (
-                  <div className='flex h-full items-center justify-center text-emerald-400'>
-                    <BookOpen className='h-7 w-7' />
-                  </div>
-                )}
+                <BookCover src={item.cover} title={item.title} author={item.author} />
               </div>
               <div className='min-w-0 flex-1'>
                 <div className='truncate font-semibold text-slate-950 dark:text-white'>
@@ -304,6 +288,11 @@ export default function BookHistoryPage() {
           </article>
         ))
       )}
+      <MusicPaginationBar
+        totalItems={items.length}
+        page={paged.page}
+        onPageChanged={setPage}
+      />
       {!loading && items.length === 0 ? (
         <div className='rounded-3xl border border-dashed border-emerald-200 bg-white/70 p-8 text-center text-sm text-slate-500 dark:border-emerald-500/20 dark:bg-gray-950/50 dark:text-slate-400'>
           暂无阅读历史

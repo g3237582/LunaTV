@@ -1,8 +1,12 @@
 'use client';
 
-import { BookmarkCheck, BookOpen, Trash2 } from 'lucide-react';
+import { BookmarkCheck, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+
+import BookCover from '@/components/books/BookCover';
+import MusicPaginationBar from '@/components/music/MusicPaginationBar';
+import { sliceMusicPage } from '@/lib/music-page-data';
 
 import { deleteBookShelf, getAllBookShelf } from '@/lib/book.db.client';
 import { BookShelfItem } from '@/lib/book.types';
@@ -13,6 +17,7 @@ import {
 
 export default function BookShelfPage() {
   const [shelf, setShelf] = useState<Record<string, BookShelfItem>>({});
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     getAllBookShelf()
@@ -28,6 +33,7 @@ export default function BookShelfPage() {
       ),
     [shelf]
   );
+  const paged = sliceMusicPage(items, page);
 
   return (
     <div className='space-y-5'>
@@ -48,25 +54,14 @@ export default function BookShelfPage() {
       </section>
 
       <div className='grid gap-4 md:grid-cols-2 xl:grid-cols-3'>
-        {items.map((item) => (
+        {paged.items.map((item) => (
           <article
             key={`${item.sourceId}-${item.bookId}`}
             className='rounded-[2rem] border border-emerald-100/80 bg-white/85 p-4 shadow-sm shadow-emerald-950/5 transition-colors duration-200 hover:border-emerald-200 hover:bg-white dark:border-emerald-500/10 dark:bg-gray-950/70 dark:hover:border-emerald-500/30'
           >
             <div className='flex gap-4'>
               <div className='h-28 w-20 shrink-0 overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-50 to-amber-50 ring-1 ring-emerald-100 dark:from-gray-900 dark:to-emerald-950/20 dark:ring-emerald-500/10'>
-                {item.cover ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={item.cover}
-                    alt={item.title}
-                    className='h-full w-full object-cover'
-                  />
-                ) : (
-                  <div className='flex h-full items-center justify-center text-slate-400'>
-                    <BookOpen className='h-7 w-7' />
-                  </div>
-                )}
+                <BookCover src={item.cover} title={item.title} author={item.author || item.sourceName} />
               </div>
               <div className='min-w-0 flex-1'>
                 <div className='truncate font-semibold text-slate-950 dark:text-white'>
@@ -118,6 +113,11 @@ export default function BookShelfPage() {
           </article>
         ))}
       </div>
+      <MusicPaginationBar
+        totalItems={items.length}
+        page={paged.page}
+        onPageChanged={setPage}
+      />
       {items.length === 0 ? (
         <div className='rounded-3xl border border-dashed border-emerald-200 bg-white/70 p-8 text-center text-sm text-slate-500 dark:border-emerald-500/20 dark:bg-gray-950/50 dark:text-slate-400'>
           书架还是空的

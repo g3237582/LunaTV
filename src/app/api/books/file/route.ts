@@ -59,6 +59,13 @@ async function proxyFile(request: NextRequest, sourceId: string, href: string) {
   const range = request.headers.get('range');
   if (range) headers.set('Range', range);
 
+  if (!headers.has('User-Agent')) {
+    headers.set(
+      'User-Agent',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36'
+    );
+  }
+
   const response = await fetch(href, {
     headers,
     redirect: 'follow',

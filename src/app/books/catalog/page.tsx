@@ -23,6 +23,8 @@ import {
 } from '@/lib/book-route-cache.client';
 
 import BookCard from '@/components/books/BookCard';
+import MusicPaginationBar from '@/components/music/MusicPaginationBar';
+import { sliceMusicPage } from '@/lib/music-page-data';
 
 function makeHref(sourceId: string, item: BookListItem) {
   return buildBookDetailPath(sourceId, item.id);
@@ -98,7 +100,7 @@ export default function BooksCatalogPage() {
   const [error, setError] = useState('');
   const [loadingCatalog, setLoadingCatalog] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const loaderRef = useRef<HTMLDivElement | null>(null);
+  const [listPage, setListPage] = useState(1);
   const sourceScrollerRef = useRef<HTMLDivElement | null>(null);
   const activeSourceItemRef = useRef<HTMLAnchorElement | null>(null);
   const navScrollerRef = useRef<HTMLDivElement | null>(null);
@@ -241,6 +243,7 @@ export default function BooksCatalogPage() {
       } else {
         setError('');
         setLoadingCatalog(true);
+        setListPage(1);
         if (!normalizedHref) setData(null);
         setEntries([]);
         setNextHref(undefined);
@@ -292,23 +295,13 @@ export default function BooksCatalogPage() {
     void loadCatalog(href, false);
   }, [sourceId, href, loadCatalog]);
 
+  const pagedEntries = sliceMusicPage(entries, listPage);
+
   useEffect(() => {
-    const node = loaderRef.current;
-    if (!node || !nextHref || loadingMore || !data) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        if (entry?.isIntersecting && nextHref && !loadingMore) {
-          void loadCatalog(nextHref, true);
-        }
-      },
-      { rootMargin: '800px 0px' }
-    );
-
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [data, nextHref, loadingMore, loadCatalog]);
+    if (!nextHref || loadingMore || loadingCatalog || !data) return;
+    if (listPage < pagedEntries.pageCount) return;
+    void loadCatalog(nextHref, true);
+  }, [data, listPage, loadingCatalog, loadingMore, loadCatalog, nextHref, pagedEntries.pageCount]);
 
   const handleSourcePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -635,7 +628,7 @@ export default function BooksCatalogPage() {
             <LoadingMoreSkeleton />
           ) : (
             <section className='grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-6'>
-              {entries.map((item) => (
+              {pagedEntries.items.map((item) => (
                 <BookCard
                   key={`${item.sourceId}-${item.id}-${
                     item.detailHref || item.acquisitionLinks[0]?.href || ''
@@ -648,9 +641,11 @@ export default function BooksCatalogPage() {
             </section>
           )}
           {loadingMore ? <LoadingMoreSkeleton /> : null}
-          {!loadingMore && nextHref ? (
-            <div ref={loaderRef} className='h-8 w-full' />
-          ) : null}
+          <MusicPaginationBar
+            page={pagedEntries.page}
+            hasMore={pagedEntries.page < pagedEntries.pageCount || Boolean(nextHref)}
+            onPageChanged={setListPage}
+          />
         </>
       ) : !error ? (
         <CatalogSkeleton />

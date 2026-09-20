@@ -22,7 +22,17 @@ import {
   LegadoRuleSearch,
 } from './book.types';
 import { applyLegadoPageRule } from './legado-page-rule';
+import { asLiteralLegadoValue } from './legado-rule-value';
+import {
+  chaptersFromPlainText,
+  extractTextFromArchive,
+  findTextDownloadHref,
+  isBrowserChallengeHtml,
+  isLegadoTextHref,
+  readTextChapterContent,
+} from './legado-text-book';
 import { getCurrentSiteId } from './site-context';
+import { toBookCoverSrc } from './opds-entry';
 import { validateProxyUrlServerSide } from './server/ssrf';
 import { legadoSubscriptionStore } from './legado/subscription-store';
 
@@ -34,6 +44,7 @@ interface ResolvedLegadoConfig {
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.LEGADO_TIMEOUT_MS || process.env.OPDS_TIMEOUT_MS || 20000);
 const MAX_TEXT_BYTES = Number(process.env.LEGADO_MAX_TEXT_BYTES || 3 * 1024 * 1024);
+const MAX_ARCHIVE_BYTES = Number(process.env.LEGADO_MAX_ARCHIVE_BYTES || 20 * 1024 * 1024);
 const DEFAULT_LEGADO_SEARCH_PAGES = Number(process.env.LEGADO_SEARCH_PAGES || 5);
 const textCache = new Map<string, { expiresAt: number; data: string }>();
 const legadoConfigCache = new Map<
@@ -549,6 +560,8 @@ function renderTemplateWithJson(template: string, json: any, source: BookSource,
 function readJsonRule(json: any, rule?: string, source?: BookSource, baseUrl?: string): string {
   if (!rule) return '';
   const trimmed = rule.trim();
+  const literal = asLiteralLegadoValue(trimmed);
+  if (literal) return literal;
   if (trimmed.includes('{{')) return renderTemplateWithJson(trimmed, json, source as BookSource, baseUrl || sourceBase(source as BookSource));
   if (isJsRuleString(trimmed)) {
     if (/result\s*=\s*['"]([^'"]+)['"]\s*\+\s*result\.([A-Za-z0-9_$-]+)/.test(trimmed)) {
@@ -720,30 +733,35 @@ function applyLegadoIndexSelector(current: cheerio.Cheerio<any>, selector: strin
 }
 
 function applyLegadoSelector($: cheerio.CheerioAPI, current: cheerio.Cheerio<any>, selector: string): cheerio.Cheerio<any> {
-  const normalized = selector.trim();
-  if (!normalized) return current;
-  const textMatch = normalized.match(/^text\.(.+)$/);
-  if (textMatch) {
-    const keyword = textMatch[1].trim();
-    const links = current.find('a[href]').filter((_, el) => $(el).text().includes(keyword));
-    if (links.length > 0) return links;
-    return current.find('button,span,div,p,li,a').filter((_, el) => $(el).text().includes(keyword));
-  }
-  const tokens = normalized.split(/\s+/).filter(Boolean);
-  if (
-    tokens.length > 1
-    && tokens.every((token) => !/[>+~]/.test(token))
-    && tokens.some((token) => /(?:\[!?\-?\d+\]|\[-?\d*:|-?\d+\]$|\.-?\d+(?::\-?\d*){0,2})$/.test(token))
-  ) {
-    let next = current;
-    for (const token of tokens) {
-      const indexed = applyLegadoIndexSelector(next, token);
-      next = indexed.selector ? next.find(indexed.selector) : indexed.current;
+  try {
+    const normalized = selector.trim();
+    if (!normalized) return current;
+    if (asLiteralLegadoValue(normalized)) return cheerio.load('')('');
+    const textMatch = normalized.match(/^text\.(.+)$/);
+    if (textMatch) {
+      const keyword = textMatch[1].trim();
+      const links = current.find('a[href]').filter((_, el) => $(el).text().includes(keyword));
+      if (links.length > 0) return links;
+      return current.find('button,span,div,p,li,a').filter((_, el) => $(el).text().includes(keyword));
     }
-    return next;
+    const tokens = normalized.split(/\s+/).filter(Boolean);
+    if (
+      tokens.length > 1
+      && tokens.every((token) => !/[>+~]/.test(token))
+      && tokens.some((token) => /(?:\[!?\-?\d+\]|\[-?\d*:|-?\d+\]$|\.-?\d+(?::\-?\d*){0,2})$/.test(token))
+    ) {
+      let next = current;
+      for (const token of tokens) {
+        const indexed = applyLegadoIndexSelector(next, token);
+        next = indexed.selector ? next.find(indexed.selector) : indexed.current;
+      }
+      return next;
+    }
+    const indexed = applyLegadoIndexSelector(current, normalized);
+    return indexed.selector ? current.find(indexed.selector) : indexed.current;
+  } catch {
+    return cheerio.load('')('');
   }
-  const indexed = applyLegadoIndexSelector(current, normalized);
-  return indexed.selector ? current.find(indexed.selector) : indexed.current;
 }
 
 function selectElements($: cheerio.CheerioAPI, root: cheerio.Cheerio<any>, rule?: string): cheerio.Cheerio<any> {
@@ -817,6 +835,8 @@ function selectXPath($: cheerio.CheerioAPI, root: cheerio.Cheerio<any>, rule: st
 
 function readValue($: cheerio.CheerioAPI, root: cheerio.Cheerio<any>, rule?: string, baseUrl?: string, jsContext?: Record<string, any>): string {
   for (const alternative of splitAlternatives(rule)) {
+    const literal = asLiteralLegadoValue(alternative);
+    if (literal) return literal;
     const templateKind = alternative.match(/\{\{\s*@@([\s\S]*?)\}\}/);
     if (templateKind) {
       const value = alternative.replace(/\{\{\s*@@([\s\S]*?)\}\}/g, (_, innerRule) => readValue($, root, String(innerRule).trim(), baseUrl, jsContext));
@@ -899,6 +919,8 @@ function readValue($: cheerio.CheerioAPI, root: cheerio.Cheerio<any>, rule?: str
 
 function readValues($: cheerio.CheerioAPI, root: cheerio.Cheerio<any>, rule?: string, baseUrl?: string): string[] {
   for (const alternative of splitAlternatives(rule)) {
+    const literal = asLiteralLegadoValue(alternative);
+    if (literal) return [literal];
     const normalized = stripFilters(alternative);
     const steps = normalized.split(/&&|@css:/).map((item) => item.trim()).filter(Boolean);
     let current = root;
@@ -1299,6 +1321,68 @@ async function fetchText(source: BookSource, url: string): Promise<string> {
   throw lastError instanceof Error ? lastError : new Error('请求失败');
 }
 
+async function fetchBytes(source: BookSource, url: string, referer?: string): Promise<Uint8Array> {
+  if (!url?.trim()) throw new Error('书源请求地址为空');
+  const request = splitUrlOptions(url);
+  const safe = await validateProxyUrlServerSide(request.url);
+  if (!safe) throw new Error(`书源地址未通过安全校验: ${request.url}`);
+
+  let lastError: unknown;
+  const maxAttempts = Math.max(1, (request.retry ?? 2) + 1);
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+    try {
+      const headers: Record<string, string> = {
+        ...(buildHeaders(source) as Record<string, string>),
+        ...(request.headers || {}),
+        Accept: 'application/zip,application/octet-stream,text/plain,*/*',
+      };
+      if (referer) headers.Referer = referer;
+      const cookie = getCookieHeader(source.id);
+      if (source.legado?.enabledCookieJar && cookie) headers.Cookie = cookie;
+      const method = (request.method || (request.body ? 'POST' : 'GET')).toUpperCase();
+      const response = await fetch(request.url, {
+        method,
+        headers,
+        body: method === 'GET' || method === 'HEAD' ? undefined : request.body,
+        signal: controller.signal,
+        cache: 'no-store',
+      });
+      if (source.legado?.enabledCookieJar) mergeSetCookie(source.id, response.headers.get('set-cookie'));
+      if (!response.ok) throw new Error(`请求失败: ${response.status}`);
+      const contentLength = Number(response.headers.get('content-length') || '0');
+      if (contentLength > MAX_ARCHIVE_BYTES) throw new Error('响应内容过大');
+      const buffer = new Uint8Array(await response.arrayBuffer());
+      if (buffer.byteLength > MAX_ARCHIVE_BYTES) throw new Error('响应内容过大');
+      return buffer;
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts - 1) await wait(300 * (attempt + 1));
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('请求失败');
+}
+
+async function tryTextDownloadChapters(source: BookSource, html: string, pageUrl: string): Promise<BookChapter[]> {
+  const downloadHref = findTextDownloadHref(html, pageUrl);
+  if (!downloadHref) return [];
+  const bytes = await fetchBytes(source, downloadHref, pageUrl);
+  if (isBrowserChallengeHtml(new TextDecoder('utf-8').decode(bytes.subarray(0, Math.min(bytes.length, 400))))) {
+    return [];
+  }
+  const text = extractTextFromArchive(bytes);
+  if (!text.trim()) return [];
+  return chaptersFromPlainText(text, pageUrl).chapters.map((chapter) => ({
+    id: stableId(`${source.id}|${chapter.href}`),
+    title: chapter.title,
+    href: chapter.href,
+    order: chapter.order,
+  }));
+}
+
 async function getSourceById(sourceId: string): Promise<BookSource> {
   const config = await resolveLegadoConfig();
   const source = config.sources.find((item) => item.id === sourceId);
@@ -1319,7 +1403,7 @@ function makeItem(source: BookSource, partial: Partial<BookListItem> & { detailH
     sourceName: source.name,
     title: partial.title || '未命名电子书',
     author: partial.author,
-    cover: partial.cover,
+    cover: toBookCoverSrc(source.id, partial.cover, 'image'),
     summary: partial.summary,
     tags: partial.tags,
     detailHref,
@@ -1691,7 +1775,7 @@ export class LegadoClient {
         sourceName: source.name,
         title,
         author: read(rule.ruleBookInfo.author) || fallback?.author,
-        cover: cover || undefined,
+        cover: toBookCoverSrc(sourceId, cover, 'image'),
         summary: read(rule.ruleBookInfo.intro) || fallback?.summary,
         tags: read(rule.ruleBookInfo.kind).split(/[,，\s]+/).filter(Boolean),
         categories: read(rule.ruleBookInfo.kind).split(/[,，\s]+/).filter(Boolean),
@@ -1709,7 +1793,7 @@ export class LegadoClient {
         sourceName: source.name,
         title: fallback?.title || '未命名电子书',
         author: fallback?.author,
-        cover: fallback?.cover,
+        cover: toBookCoverSrc(sourceId, fallback?.cover, 'image'),
         summary: fallback?.summary,
         detailHref,
         acquisitionLinks: [{ rel: 'legado:chapters', type: 'application/x-legado-chapters+json', href: tocUrl, title: '章节目录' }],
@@ -1731,6 +1815,15 @@ export class LegadoClient {
 
     const targetUrl = normalizeUrl(sourceBase(source), tocHref);
     const html = await fetchText(source, targetUrl);
+    try {
+      const textChapters = await tryTextDownloadChapters(source, html, targetUrl);
+      if (textChapters.length > 0) {
+        tocCache.set(cacheKey, { data: textChapters, expiresAt: Date.now() + cacheTTL });
+        return textChapters;
+      }
+    } catch {
+      // 官网压缩包不可用时再回退到页面目录
+    }
     const chapters: BookChapter[] = [];
     const json = parseJsonMaybe(html);
     const jsItems = evaluateJsListRule(rule.ruleToc.chapterList, { result: html, src: html, baseUrl: targetUrl, source: rule });
@@ -1798,6 +1891,29 @@ export class LegadoClient {
   async getChapterContent(sourceId: string, chapterHref: string, tocHref?: string): Promise<BookChapterContent> {
     const source = await getSourceById(sourceId);
     const rule = getRule(source);
+    if (isLegadoTextHref(chapterHref)) {
+      const cacheKey = `chapter|${source.id}|${chapterHref}`;
+      const cached = chapterCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) return cached.data;
+      if (!readTextChapterContent(chapterHref) && tocHref) {
+        tocCache.delete(`toc|${source.id}|${tocHref}`);
+        await this.getChapters(sourceId, tocHref).catch(() => []);
+      }
+      const text = readTextChapterContent(chapterHref);
+      if (!text) throw new Error('全文缓存已失效，请重新打开目录');
+      const chapters = tocHref ? await this.getChapters(sourceId, tocHref).catch(() => []) : [];
+      const index = chapters.findIndex((item) => item.href === chapterHref);
+      const content: BookChapterContent = {
+        id: stableId(`${source.id}|${chapterHref}`),
+        title: index >= 0 ? chapters[index].title : '',
+        href: chapterHref,
+        content: cleanContent(text),
+        previousHref: index > 0 ? chapters[index - 1].href : undefined,
+        nextHref: index >= 0 && index + 1 < chapters.length ? chapters[index + 1].href : undefined,
+      };
+      chapterCache.set(cacheKey, { data: content, expiresAt: Date.now() + 24 * 60 * 60 * 1000 });
+      return content;
+    }
     if (!rule.ruleContent?.content) throw new Error('该 Legado 书源缺少正文规则');
     const targetUrl = normalizeUrl(sourceBase(source), chapterHref);
     const cacheKey = `chapter|${source.id}|${targetUrl}`;

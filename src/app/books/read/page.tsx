@@ -53,6 +53,14 @@ import {
   getBookTtsProgress,
   saveBookTtsProgress,
 } from '@/lib/book-tts-progress.client';
+import {
+  EPUBJS_SCRIPT_SRC,
+  JSZIP_SCRIPT_SRC,
+  getEpubReaderReopenKey,
+  getEpubRenditionOptions,
+  isEpubZipBuffer,
+  sanitizeEpubDisplayTarget,
+} from '@/lib/epub-reader';
 
 declare global {
   interface Window {
@@ -86,7 +94,7 @@ interface EpubThemes {
 interface EpubBookInstance {
   renderTo: (
     element: HTMLElement,
-    options: Record<string, string | boolean>
+    options: Record<string, string | number | boolean>
   ) => EpubRendition;
   locations?: {
     percentageFromCfi?: (cfi: string) => number;
@@ -289,14 +297,14 @@ async function loadEpubScript() {
   if (!window.JSZip) {
     await loadScriptOnce(
       'script[data-jszip]',
-      'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
+      JSZIP_SCRIPT_SRC,
       'JSZip 加载失败'
     );
   }
   if (!window.ePub) {
     await loadScriptOnce(
       'script[data-epubjs]',
-      'https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js',
+      EPUBJS_SCRIPT_SRC,
       'epub.js 加载失败'
     );
   }
@@ -1971,22 +1979,10 @@ function chunkTtsText(text: string, maxChars: number): TtsChunk[] {
   return chunks;
 }
 
-function getRenditionOptions(mode: ReaderMode) {
-  return mode === 'scrolled'
-    ? {
-        width: '100%',
-        height: '100%',
-        spread: 'none',
-        manager: 'default',
-        flow: 'scrolled-doc',
-      }
-    : {
-        width: '100%',
-        height: '100%',
-        spread: 'none',
-        manager: 'default',
-        flow: 'paginated',
-      };
+function getViewerSize(element: HTMLElement | null) {
+  if (!element) return undefined;
+  const rect = element.getBoundingClientRect();
+  return { width: rect.width, height: rect.height };
 }
 
 function decodeBase64Audio(base64: string, mimeType: string) {
@@ -2413,8 +2409,25 @@ export default function BookReadPage() {
 
   const navigateToTarget = useCallback(async (target?: string) => {
     if (!renditionRef.current) return;
-    await renditionRef.current.display(target);
+    const nextTarget = sanitizeEpubDisplayTarget(target);
+    try {
+      await renditionRef.current.display(nextTarget);
+    } catch {
+      await renditionRef.current.display();
+    }
   }, []);
+  const persistCurrentProgressRef = useRef(persistCurrentProgress);
+  const applyReaderThemeRef = useRef(applyReaderTheme);
+  const navigateToTargetRef = useRef(navigateToTarget);
+  persistCurrentProgressRef.current = persistCurrentProgress;
+  applyReaderThemeRef.current = applyReaderTheme;
+  navigateToTargetRef.current = navigateToTarget;
+  const epubReopenKey = getEpubReaderReopenKey({
+    sourceId: manifest?.book.sourceId,
+    bookId: manifest?.book.id,
+    acquisitionHref: manifest?.acquisitionHref,
+    mode: settings.mode,
+  });
 
   const captureCurrentEpubLocation = useCallback(() => {
     const location = renditionRef.current?.currentLocation?.();
@@ -2851,7 +2864,14 @@ export default function BookReadPage() {
         }
 
         if (destroyed) return;
+        if (!isEpubZipBuffer(fileBuffer)) {
+          throw new Error('下载的文件不是有效的 EPUB');
+        }
         const book = window.ePub(fileBuffer);
+        if (book.ready) {
+          await book.ready;
+        }
+        if (destroyed || !viewerRef.current) return;
         const readyFallbackTimer = window.setTimeout(() => {
           if (!destroyed) {
             setReady(true);
@@ -2861,11 +2881,14 @@ export default function BookReadPage() {
 
         const rendition = book.renderTo(
           viewerRef.current,
-          getRenditionOptions(settings.mode)
+          getEpubRenditionOptions(
+            settings.mode,
+            getViewerSize(viewerRef.current)
+          )
         );
         bookRef.current = book;
         renditionRef.current = rendition;
-        applyReaderTheme(settingsRef.current);
+        applyReaderThemeRef.current(settingsRef.current);
 
         const restoreTarget = restoreTargetRef.current;
         let restoreMessageShown = false;
@@ -2924,7 +2947,7 @@ export default function BookReadPage() {
           queueReadRecord(location, normalizedProgress, chapterTitle);
         });
 
-        void navigateToTarget(restoreTarget).catch(() => {
+        void navigateToTargetRef.current(restoreTarget).catch(() => {
           if (!destroyed) {
             setReady(true);
             setFileLoadState('ready');
@@ -2969,18 +2992,11 @@ export default function BookReadPage() {
       destroyed = true;
       scrollListenerCleanupRef.current?.();
       scrollListenerCleanupRef.current = null;
-      persistCurrentProgress();
+      persistCurrentProgressRef.current();
       renditionRef.current?.destroy?.();
       bookRef.current?.destroy?.();
     };
-  }, [
-    manifest,
-    settings.mode,
-    applyReaderTheme,
-    persistCurrentProgress,
-    queueReadRecord,
-    navigateToTarget,
-  ]);
+  }, [epubReopenKey, manifest]);
 
   useEffect(() => {
     const flushPendingReadRecordOnLeave = () => {

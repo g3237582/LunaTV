@@ -10,12 +10,15 @@ import {
   XCircle,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
+import MusicPaginationBar from '@/components/music/MusicPaginationBar';
 import { BookSource } from '@/lib/book.types';
 import {
   BOOK_SOURCE_PAGE_SIZE,
 } from '@/lib/book-source-summary';
+import { nextPrefetchPages, parsePageParam, withPageQuery } from '@/lib/music-page-data';
 
 function BooksHomeSkeleton() {
   return (
@@ -63,16 +66,19 @@ function CapabilityPill({
 }
 
 export default function BooksHomePage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const page = parsePageParam(searchParams.get('page'));
   const [sources, setSources] = useState<BookSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [allCount, setAllCount] = useState(0);
   const [catalogCount, setCatalogCount] = useState(0);
   const [searchCount, setSearchCount] = useState(0);
+  const skipQueryPageResetRef = useRef(true);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query), 200);
@@ -80,7 +86,17 @@ export default function BooksHomePage() {
   }, [query]);
 
   useEffect(() => {
-    setPage(1);
+    if (skipQueryPageResetRef.current) {
+      skipQueryPageResetRef.current = false;
+      return;
+    }
+    if (page <= 1) return;
+    const href = debouncedQuery.trim()
+      ? `/books?q=${encodeURIComponent(debouncedQuery.trim())}`
+      : '/books';
+    router.replace(href);
+    // Only reset the page when the search keyword changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedQuery]);
 
   useEffect(() => {
@@ -107,6 +123,16 @@ export default function BooksHomePage() {
         setAllCount(Number(data.allCount) || 0);
         setCatalogCount(Number(data.catalogCount) || 0);
         setSearchCount(Number(data.searchCount) || 0);
+        const nextTotal = Number(data.total) || 0;
+        const pageCount = Math.max(1, Math.ceil(nextTotal / BOOK_SOURCE_PAGE_SIZE));
+        nextPrefetchPages(page, pageCount).forEach((nextPage) => {
+          const prefetch = new URLSearchParams({
+            page: String(nextPage),
+            pageSize: String(BOOK_SOURCE_PAGE_SIZE),
+          });
+          if (debouncedQuery.trim()) prefetch.set('q', debouncedQuery.trim());
+          void fetch(`/api/books/sources?${prefetch.toString()}`);
+        });
       })
       .catch((err) => {
         if (err?.name === 'AbortError') return;
@@ -117,8 +143,6 @@ export default function BooksHomePage() {
       });
     return () => controller.abort();
   }, [debouncedQuery, page]);
-
-  const totalPages = Math.max(1, Math.ceil(total / BOOK_SOURCE_PAGE_SIZE));
 
   const stats = useMemo(() => {
     return [
@@ -267,29 +291,17 @@ export default function BooksHomePage() {
           {query.trim() ? '没有匹配的书源' : '暂无可用书源'}
         </div>
       ) : null}
-      {total > BOOK_SOURCE_PAGE_SIZE ? (
-        <div className='flex items-center justify-center gap-3 text-sm text-slate-500 dark:text-slate-400'>
-          <button
-            type='button'
-            disabled={page <= 1}
-            onClick={() => setPage((current) => Math.max(1, current - 1))}
-            className='rounded-full border border-emerald-100 px-3 py-1 disabled:opacity-40 dark:border-emerald-500/20'
-          >
-            上一页
-          </button>
-          <span>
-            {page} / {totalPages}
-          </span>
-          <button
-            type='button'
-            disabled={page >= totalPages}
-            onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
-            className='rounded-full border border-emerald-100 px-3 py-1 disabled:opacity-40 dark:border-emerald-500/20'
-          >
-            下一页
-          </button>
-        </div>
-      ) : null}
+      <MusicPaginationBar
+        totalItems={total}
+        page={page}
+        pageSize={BOOK_SOURCE_PAGE_SIZE}
+        onPageChanged={(next) => {
+          const href = debouncedQuery.trim()
+            ? `/books?q=${encodeURIComponent(debouncedQuery.trim())}`
+            : '/books';
+          router.push(withPageQuery(href, next));
+        }}
+      />
         </>
       ) : null}
     </div>

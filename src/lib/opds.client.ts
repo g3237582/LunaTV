@@ -8,6 +8,9 @@ import {
   isLikelyNavigationEntry,
   isNavigationLink,
   isNavigationRel,
+  resolveCoverHref,
+  resolveOpdsAuthor,
+  toBookCoverSrc,
 } from './opds-entry';
 import {
   BookAcquisitionLink,
@@ -105,31 +108,6 @@ function mapFormat(type: string): 'epub' | 'pdf' | null {
   return null;
 }
 
-function isCoverRel(rel?: string): boolean {
-  if (!rel) return false;
-  const normalized = rel.toLowerCase();
-  return normalized.includes('opds-spec.org/cover')
-    || normalized.includes('opds-spec.org/image')
-    || normalized.includes('image/thumbnail')
-    || normalized === 'thumbnail'
-    || normalized === 'cover';
-}
-
-function isImageType(type?: string): boolean {
-  return !!type && type.toLowerCase().startsWith('image/');
-}
-
-function pickCoverLink(links: ParsedFeedLink[]): string | undefined {
-  const thumbnail = links.find((link) => {
-    const rel = (link.rel || '').toLowerCase();
-    return rel.includes('thumbnail') && (isCoverRel(link.rel) || isImageType(link.type));
-  });
-  const cover = thumbnail
-    || links.find((link) => isCoverRel(link.rel))
-    || links.find((link) => isImageType(link.type) && !isAcquisitionRel(link.rel));
-  return cover?.href;
-}
-
 function pickDetailHref(links: ParsedFeedLink[]): string | undefined {
   const preferred = links.find((link) => link.rel === 'alternate' && (link.type || '').includes('atom+xml'))
     || links.find((link) => link.rel === 'self' && (link.type || '').includes('atom+xml'))
@@ -157,8 +135,8 @@ function mapEntryToItem(source: BookSource, entry: ParsedFeedEntry): BookListIte
     sourceId: source.id,
     sourceName: source.name,
     title: entry.title || '未命名电子书',
-    author: entry.author,
-    cover: (() => { const coverHref = pickCoverLink(entry.links); return coverHref ? buildProxyUrl(source.id, coverHref) : undefined; })(),
+    author: resolveOpdsAuthor(entry),
+    cover: toBookCoverSrc(source.id, resolveCoverHref(entry.links)),
     summary: entry.summary || entry.content || undefined,
     language: entry.language,
     published: entry.published,

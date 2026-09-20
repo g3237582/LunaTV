@@ -11,6 +11,7 @@ import {
   saveBookShelf,
 } from '@/lib/book.db.client';
 import { BookChapter, BookDetail, BookShelfItem } from '@/lib/book.types';
+import BookCover from '@/components/books/BookCover';
 import {
   buildBookReadPath,
   cacheBookDetail,
@@ -254,19 +255,9 @@ export default function BookDetailPage() {
         <div className='absolute -right-20 -top-24 h-64 w-64 rounded-full bg-emerald-300/20 blur-3xl dark:bg-emerald-500/10' />
         <div className='relative grid gap-6 md:grid-cols-[220px_1fr]'>
           <div className='overflow-hidden rounded-[2rem] bg-gradient-to-br from-emerald-50 to-lime-50 shadow-xl shadow-emerald-950/10 ring-1 ring-emerald-100 dark:from-gray-900 dark:to-emerald-950/20 dark:ring-emerald-500/10'>
-            {detail.cover ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={detail.cover}
-                alt={detail.title}
-                className='h-full w-full object-cover'
-              />
-            ) : (
-              <div className='flex aspect-[3/4] flex-col items-center justify-center gap-2 text-sm text-emerald-500 dark:text-emerald-300'>
-                <BookOpen className='h-9 w-9' />
-                无封面
-              </div>
-            )}
+            <div className='aspect-[3/4]'>
+              <BookCover src={detail.cover} title={detail.title} author={detail.author} />
+            </div>
           </div>
           <div className='flex min-w-0 flex-col justify-between gap-5'>
             <div>
