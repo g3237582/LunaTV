@@ -775,11 +775,83 @@ html:not([data-loading-style]) .mtv-load-talisman {
   }
 }
 /* 文案 + 底部细进度条 */
+.mtv-tal-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  text-align: center;
+}
 .mtv-tal-phrase {
   margin: 0;
   font-size: 20px;
   font-weight: 700;
   color: var(--mtv-ink);
+}
+/* 轨道是主题色的淡影，填充是同色深浅渐变。宽度按阵盘比例推，但先撞容器宽度，
+   窄屏（fixed 铺满、左右各留 24px）上不会顶出去。 */
+.mtv-tal-bar {
+  width: 100%;
+  max-width: calc(var(--mtv-tal-s) * 200 / 150);
+  height: calc(var(--mtv-tal-s) * 3 / 150);
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--mtv-acc) 22%, transparent);
+}
+/* 脉冲：一个 1.2s 的心跳里，一段亮光在填充内从左往右游过去（mtv-tal-flow），
+   整条同时「攒力」亮起来、在光游到头部时最盛（mtv-tal-charge）。两个动画共用
+   周期，天然同相，不必靠 delay。光只在填充段里走 —— 不越出前沿。 */
+.mtv-tal-bar i {
+  position: relative;
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  /* 下游光段就靠这层裁切，才会「从左边冒出来、到头部消失」而不越界 */
+  overflow: hidden;
+  background: linear-gradient(90deg, var(--mtv-acc-hover), var(--mtv-acc));
+  transition: width 0.9s cubic-bezier(0.22, 0.61, 0.36, 1);
+  animation: mtv-tal-charge 1.2s ease-in-out infinite;
+}
+/* 线内流光：头尾透明的渐变，亮端在前，看着是一段游走的光而不是挪动的色块。
+   起点整段落在填充左侧之外（left: -55%），终点整段越过头部，两端都由
+   overflow 裁掉，所以只在条内可见，来回都不露头。 */
+.mtv-tal-bar i::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -55%;
+  width: 55%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--mtv-acc) 45%, #fff)
+  );
+  animation: mtv-tal-flow 1.2s linear infinite;
+}
+@keyframes mtv-tal-charge {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  55% {
+    filter: brightness(1.4);
+  }
+  80% {
+    filter: brightness(1.06);
+  }
+}
+@keyframes mtv-tal-flow {
+  0% {
+    transform: translateX(0);
+  }
+  /* 元素宽是填充的 55%，要走完「自身 + 整条填充」= 100%/55% ≈ 282% 自身宽 */
+  58%,
+  100% {
+    transform: translateX(282%);
+  }
 }
 
 /* ---------------- ③ 符阵·坏死（失败态） ----------------

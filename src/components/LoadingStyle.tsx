@@ -57,6 +57,12 @@ const clampIdx = (idx: number, len: number) =>
 const runeCountAt = (idx: number, len: number) =>
   len > 0 ? Math.round(((idx + 1) / len) * LOADING_RUNES.length) : 0;
 
+/* 阵底细进度条的填充比例。示例里四阶段量出来是 10/45/78/100 —— 首格先垫一点
+ * 底（空着像坏了），中段缓出，末格到底；这里按同一条曲线折算，好让实盘那
+ * 两三格（见各页的 steps）也成立。 */
+const barPctAt = (idx: number, len: number) =>
+  len < 2 ? 100 : Math.round(10 + 90 * Math.pow(idx / (len - 1), 0.75));
+
 const RuneRing = ({ lit, ember }: { lit: number; ember: boolean }) => (
   <div className='mtv-tal-runes'>
     {LOADING_RUNES.map((char, i) => (
@@ -150,7 +156,16 @@ export default function LoadingStyle({
               </div>
             </div>
           </div>
-          <p className='mtv-tal-phrase'>{message}</p>
+          <div className='mtv-tal-body'>
+            <p className='mtv-tal-phrase'>{message}</p>
+            {/* 只有整页加载才有进度条。播放器蒙层是换源/换集的短暂过渡，
+                「初始化 → 播放」两步之间跨了 90%，摆个进度条是个假指标。 */}
+            {!onDark && (
+              <div className='mtv-tal-bar'>
+                <i style={{ width: `${barPctAt(idx, steps.length)}%` }} />
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </>
