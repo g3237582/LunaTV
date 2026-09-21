@@ -2124,6 +2124,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
             isBangumi={isBangumi}
             tmdbId={tmdb_id}
             type={actualSearchType as 'movie' | 'tv'}
+            year={actualYear}
             seasonNumber={seasonNumber}
             currentEpisode={currentEpisode}
             cmsData={cmsData}

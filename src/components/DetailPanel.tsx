@@ -35,6 +35,7 @@ interface DetailPanelProps {
   isBangumi?: boolean;
   tmdbId?: number;
   type?: 'movie' | 'tv';
+  year?: string;
   seasonNumber?: number;
   currentEpisode?: number;
   cmsData?: {
@@ -95,6 +96,56 @@ interface GalleryImage {
   imageType: 'backdrop' | 'poster';
 }
 
+// 从多个 TMDB 搜索结果中挑选最匹配的一个
+// 依据媒体类型（单集大概率是电影）与年份辅助打分，无有效线索时降级到第一个
+const pickBestTmdbResult = (
+  results: any[],
+  hints: { mediaTypeHint?: 'movie' | 'tv'; year?: string }
+): any => {
+  if (!results || results.length === 0) return undefined;
+  if (results.length === 1) return results[0];
+
+  const { mediaTypeHint, year } = hints;
+  const targetYear = year ? parseInt(year, 10) : NaN;
+
+  const getResultYear = (r: any): number => {
+    const date =
+      r.media_type === 'movie' ? r.release_date : r.first_air_date;
+    return date ? parseInt(String(date).substring(0, 4), 10) : NaN;
+  };
+
+  let best = results[0];
+  let bestScore = -Infinity;
+
+  results.forEach((r) => {
+    let score = 0;
+
+    // 媒体类型匹配（权重最高）
+    if (mediaTypeHint && r.media_type === mediaTypeHint) {
+      score += 10;
+    }
+
+    // 年份匹配：完全一致加分最高，相差 1 年次之
+    if (!Number.isNaN(targetYear)) {
+      const ry = getResultYear(r);
+      if (!Number.isNaN(ry)) {
+        const diff = Math.abs(ry - targetYear);
+        if (diff === 0) score += 8;
+        else if (diff === 1) score += 4;
+        else if (diff <= 2) score += 1;
+      }
+    }
+
+    // 严格大于才更新，保证同分时保留靠前（更相关）的结果
+    if (score > bestScore) {
+      bestScore = score;
+      best = r;
+    }
+  });
+
+  return best;
+};
+
 const DetailPanel: React.FC<DetailPanelProps> = ({
   isOpen,
   onClose,
@@ -105,6 +156,7 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
   isBangumi,
   tmdbId,
   type = 'movie',
+  year,
   seasonNumber,
   currentEpisode,
   cmsData,
@@ -465,6 +517,16 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
     return { searchTitle, extractedSeasonNumber };
   };
 
+  // 推断媒体类型：集数是更强的线索（单集大概率是电影，多集为剧集），
+  // 无集数信息时降级用调用方传入的 type
+  const getMediaTypeHint = (): 'movie' | 'tv' | undefined => {
+    const episodesCount = cmsData?.episodes?.length;
+    if (typeof episodesCount === 'number' && episodesCount > 0) {
+      return episodesCount === 1 ? 'movie' : 'tv';
+    }
+    return type;
+  };
+
   // 根据指定的搜索结果加载 TMDB 详情
   const applyTmdbResult = async (
     result: any,
@@ -741,7 +803,11 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
       if (searchData.results && searchData.results.length > 0) {
         // 保存全部搜索结果,供纠错切换
         setTmdbResults(searchData.results);
-        await applyTmdbResult(searchData.results[0], extractedSeasonNumber);
+        const best = pickBestTmdbResult(searchData.results, {
+          mediaTypeHint: getMediaTypeHint(),
+          year,
+        });
+        await applyTmdbResult(best, extractedSeasonNumber);
         return;
       }
 
@@ -757,6 +823,7 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
     tmdbId,
     title,
     type,
+    year,
     seasonNumber,
     poster,
     cmsData,
@@ -811,7 +878,11 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
     if (searchData.results && searchData.results.length > 0) {
       // 保存全部搜索结果,供纠错切换
       setTmdbResults(searchData.results);
-      await applyTmdbResult(searchData.results[0], extractedSeasonNumber);
+      const best = pickBestTmdbResult(searchData.results, {
+        mediaTypeHint: getMediaTypeHint(),
+        year,
+      });
+      await applyTmdbResult(best, extractedSeasonNumber);
       return;
     }
 

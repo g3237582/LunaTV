@@ -11826,6 +11826,7 @@ function PlayPageClient() {
               : undefined
           }
           type={detail.type_name === '电影' ? 'movie' : 'tv'}
+          year={detail.year}
           currentEpisode={currentEpisodeIndex + 1}
           cmsData={
             // 非特殊源使用 cms 数据
