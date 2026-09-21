@@ -130,6 +130,7 @@ export interface BookListItem {
   sourceId: string;
   sourceName: string;
   title: string;
+  name?: string;
   author?: string;
   cover?: string;
   summary?: string;

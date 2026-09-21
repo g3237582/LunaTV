@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { legadoClient } from '@/lib/legado.client';
+import { bookReadError } from '@/lib/book-chapters';
+import { bookProvider } from '@/lib/book-provider';
 
 import { getAuthorizedBooksUsername } from '../../_utils';
 
@@ -19,13 +20,14 @@ export async function GET(request: NextRequest) {
     if (!sourceId) return NextResponse.json({ error: '缺少 sourceId' }, { status: 400 });
 
     const chapters = bookId
-      ? await legadoClient.getChaptersByBookId(sourceId, bookId)
+      ? await bookProvider.getChaptersByBookId(sourceId, bookId)
       : href
-        ? await legadoClient.getChapters(sourceId, href)
+        ? await bookProvider.getChapters(sourceId, href)
         : null;
     if (!chapters) return NextResponse.json({ error: '缺少 bookId 或 href，无法定位章节目录' }, { status: 400 });
     return NextResponse.json({ chapters }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+    const mapped = bookReadError(error);
+    return NextResponse.json(mapped.body, { status: mapped.status });
   }
 }
