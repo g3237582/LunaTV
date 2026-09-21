@@ -79,6 +79,44 @@ describe('OPDS chapters rejection path', () => {
     expect(() => assertChaptersSupported(legadoSource())).not.toThrow();
   });
 
+  it('prefers detailHref over bookId, bookUrl, and href', () => {
+    expect(
+      resolveBookChaptersRequest({
+        bookId: 'https://books.example/id/377259',
+        bookUrl: 'https://books.example/id/377259',
+        href: 'https://books.example/legacy',
+        detailHref: 'https://books.example/info/santi',
+      })
+    ).toEqual({
+      mode: 'detail',
+      bookId: 'https://books.example/id/377259',
+      detailHref: 'https://books.example/info/santi',
+    });
+  });
+
+  it('falls back to bookUrl then href when detailHref is absent', () => {
+    expect(
+      resolveBookChaptersRequest({
+        bookId: '377259',
+        bookUrl: 'https://books.example/info/santi',
+      })
+    ).toEqual({
+      mode: 'detail',
+      bookId: '377259',
+      detailHref: 'https://books.example/info/santi',
+    });
+    expect(
+      resolveBookChaptersRequest({
+        bookId: '377259',
+        href: 'https://books.example/info/santi',
+      })
+    ).toEqual({
+      mode: 'detail',
+      bookId: '377259',
+      detailHref: 'https://books.example/info/santi',
+    });
+  });
+
   it('keeps an opaque bookId and uses the search detail href as the TOC fallback', () => {
     expect(
       resolveBookChaptersRequest({

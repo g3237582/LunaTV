@@ -128,4 +128,46 @@ describe('Legado chapters when bookId cannot locate the detail page', () => {
     const chapters = await legadoClient.getChaptersByBookId(source.id, '377259');
     expect(chapters.map((chapter) => chapter.title)).toEqual(['第一章 科学边界']);
   });
+
+  it('uses detailHref even when the bookUrl {id} template can build a different page from bookId', async () => {
+    const previous = process.env.LEGADO_SOURCES_JSON;
+    process.env.LEGADO_SOURCES_JSON = JSON.stringify([
+      {
+        ...SOURCE_RULE,
+        bookSourceName: '优先详情地址',
+        ruleSearch: {
+          ...SOURCE_RULE.ruleSearch,
+          bookUrl: 'https://books.example/id/{{$.id}}',
+        },
+      },
+    ]);
+    jest.resetModules();
+    try {
+      const mod = await import('@/lib/legado.client');
+      const source = (await mod.legadoClient.getSources()).find((item) => item.name === '优先详情地址');
+      if (!source) throw new Error('测试书源未加载');
+      const calls: string[] = [];
+      global.fetch = jest.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        calls.push(url);
+        const body = url === DETAIL_HREF ? DETAIL_BODY : url === 'https://books.example/toc/santi' ? TOC_BODY : '{"chapters":[{"title":"错误目录","url":"https://books.example/wrong/1"}]}';
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => body,
+          arrayBuffer: async () => Buffer.from(body),
+        };
+      }) as unknown as typeof fetch;
+
+      const chapters = await mod.legadoClient.getChaptersByBookId(source.id, '377259', {
+        detailHref: DETAIL_HREF,
+      });
+
+      expect(chapters.map((chapter) => chapter.title)).toEqual(['第一章 科学边界']);
+      expect(calls.some((url) => url.includes('/id/377259'))).toBe(false);
+    } finally {
+      process.env.LEGADO_SOURCES_JSON = previous;
+    }
+  });
 });

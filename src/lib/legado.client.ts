@@ -1799,7 +1799,8 @@ export class LegadoClient {
         : '';
     const explicitRaw = options?.detailHref?.trim() || '';
     const explicit = explicitRaw ? normalizeUrl(base, explicitRaw) : '';
-    const detailHref = fromBookId || (isDirectBookLocator(explicit) ? explicit : '') || readRememberedDetailHref(sourceId, bookId);
+    // 客户端随搜索结果传来的 detailHref 是详情页本身。bookId 的 {id} 模板可能拼出另一页，不能盖过它。
+    const detailHref = (isDirectBookLocator(explicit) ? explicit : '') || fromBookId || readRememberedDetailHref(sourceId, bookId);
     if (!detailHref) throw new Error('该 Legado 书源无法通过 bookId 定位详情，请重新搜索后打开');
     const detail = await this.getBookDetail(sourceId, detailHref, { id: bookId, detailHref });
     const tocHref = detail.acquisitionLinks.find((item) => item.rel === 'legado:chapters' || item.type.toLowerCase().includes('legado-chapters'))?.href;

@@ -20,10 +20,11 @@ export async function GET(request: NextRequest) {
       bookId: searchParams.get('bookId'),
       href: searchParams.get('href'),
       detailHref: searchParams.get('detailHref'),
+      bookUrl: searchParams.get('bookUrl'),
       tocHref: searchParams.get('tocHref'),
     });
     if (lookup.mode === 'missing') {
-      return NextResponse.json({ error: '缺少 bookId 或 href，无法定位章节目录' }, { status: 400 });
+      return NextResponse.json({ error: '缺少 bookId、detailHref 或 href，无法定位章节目录' }, { status: 400 });
     }
 
     const chapters = lookup.mode === 'toc'

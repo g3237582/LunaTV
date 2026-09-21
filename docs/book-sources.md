@@ -40,6 +40,6 @@ OPDS 源没有章节目录。`/api/books/read/chapters` 返回 HTTP 422，`code`
 
 `GET /api/books/read/chapters?sourceId=<id>&bookId=<id>&detailHref=<搜索结果的 detailHref>`
 
-`bookId` 若只是书源 JSON 里的数字或旧哈希，必须同时带 `detailHref`（或 `href`，与 `bookId` 一起出现时视为详情地址）。已经拿到目录地址时用 `tocHref`。仅有 `href`、没有 `bookId` 时，`href` 仍表示目录地址。
+查询参数里的 `detailHref` 是主定位符：只要带了它，就用它打开详情再取目录，不再用 `bookId` 的 `{id}` 模板另拼一页。没有 `detailHref` 时，依次回退到 `bookUrl`、`bookId`，以及和 `bookId` 一起传来的 `href`。已经拿到目录地址时用 `tocHref`。仅有 `href`、没有 `bookId` / `detailHref` / `bookUrl` 时，`href` 仍表示目录地址。OPDS 源即使带了 `detailHref`，章节接口仍返回 422 `chapters_not_applicable`。
 
 目标是同一书源走通：搜索有结果 → 章节列表非空 → 章节正文为文本。OPDS 的合格结果是 422 `chapters_not_applicable`，不是章节正文。

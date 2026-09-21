@@ -62,27 +62,31 @@ function cleanQuery(value?: string | null) {
 
 /**
  * 章节目录定位。
+ * 有 `detailHref` 时它是主定位符，优先于 `bookId` / `bookUrl` / `href`。
+ * 没有 `detailHref` 时，再用 `bookUrl`，然后才是和 `bookId` 一起传来的 `href`。
  * `tocHref` 是已经解析好的目录地址。
- * `bookId` 可能只是书源 JSON 里的数字/哈希，这时用 `detailHref`，或和 bookId 一起传来的 `href`（搜索结果详情地址）打开详情再取目录。
- * 仅有 `href`、没有 bookId 时保持旧行为：把它当作目录地址。
+ * 仅有 `href`、没有 bookId / detailHref / bookUrl 时，`href` 仍表示目录地址。
  */
 export function resolveBookChaptersRequest(input: {
   bookId?: string | null;
   href?: string | null;
   detailHref?: string | null;
+  bookUrl?: string | null;
   tocHref?: string | null;
 }): BookChaptersRequest {
   const bookId = cleanQuery(input.bookId);
   const href = cleanQuery(input.href);
   const detailHref = cleanQuery(input.detailHref);
+  const bookUrl = cleanQuery(input.bookUrl);
   const tocHref = cleanQuery(input.tocHref);
 
   if (tocHref) return { mode: 'toc', href: tocHref };
+  if (detailHref) return { mode: 'detail', bookId: bookId || detailHref, detailHref };
   if (bookId) {
-    const fallback = detailHref || href;
+    const fallback = bookUrl || href;
     return { mode: 'detail', bookId, detailHref: fallback || undefined };
   }
-  if (detailHref) return { mode: 'detail', bookId: detailHref, detailHref };
+  if (bookUrl) return { mode: 'detail', bookId: bookUrl, detailHref: bookUrl };
   if (href) return { mode: 'toc', href };
   return { mode: 'missing' };
 }
