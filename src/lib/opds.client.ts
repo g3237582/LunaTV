@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { parseStringPromise } from 'xml2js';
 
-import { isPlaceholderBookTitle, resolveBookTitle, withBookNames } from './book-title';
 import {
   BookAcquisitionLink,
   BookCatalogResult,
@@ -12,6 +11,7 @@ import {
   BookSource,
   BookSourceCapabilities,
 } from './book.types';
+import { isPlaceholderBookTitle, resolveBookTitle, withBookNames } from './book-title';
 import { getConfig } from './config';
 import {
   isAcquisitionRel,

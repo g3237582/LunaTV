@@ -1,12 +1,12 @@
+import type { BookSource } from '@/lib/book.types';
 import {
-  BookChaptersNotApplicableError,
-  CHAPTERS_NOT_APPLICABLE_CODE,
   assertChaptersSupported,
+  BookChaptersNotApplicableError,
   bookReadError,
   bookSourceKind,
+  CHAPTERS_NOT_APPLICABLE_CODE,
   chaptersNotApplicablePayload,
 } from '@/lib/book-chapters';
-import type { BookSource } from '@/lib/book.types';
 
 function opdsSource(partial: Partial<BookSource> = {}): BookSource {
   return {

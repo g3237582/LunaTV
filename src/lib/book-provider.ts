@@ -1,4 +1,3 @@
-import { assertChaptersSupported, bookSourceKind } from './book-chapters';
 import {
   BookCatalogResult,
   BookChapter,
@@ -9,6 +8,7 @@ import {
   BookSearchResult,
   BookSource,
 } from './book.types';
+import { assertChaptersSupported, bookSourceKind } from './book-chapters';
 import { legadoClient } from './legado.client';
 import { opdsClient } from './opds.client';
 

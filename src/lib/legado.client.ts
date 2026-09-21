@@ -1,12 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { DOMParser } from '@xmldom/xmldom';
 import * as cheerio from 'cheerio/slim';
 import crypto from 'crypto';
 import he from 'he';
 import vm from 'vm';
-import { DOMParser } from '@xmldom/xmldom';
 import xpath from 'xpath';
 
-import { getConfig } from './config';
 import {
   BookAcquisitionLink,
   BookCatalogResult,
@@ -22,6 +21,8 @@ import {
   LegadoRuleSearch,
 } from './book.types';
 import { resolveBookTitle, withBookNames } from './book-title';
+import { getConfig } from './config';
+import { legadoSubscriptionStore } from './legado/subscription-store';
 import { formatLegadoHttpError, rewriteLegadoFetchError } from './legado-http-error';
 import { applyLegadoPageRule } from './legado-page-rule';
 import { asLiteralLegadoValue } from './legado-rule-value';
@@ -33,10 +34,9 @@ import {
   isLegadoTextHref,
   readTextChapterContent,
 } from './legado-text-book';
-import { getCurrentSiteId } from './site-context';
 import { toBookCoverSrc } from './opds-entry';
 import { validateProxyUrlServerSide } from './server/ssrf';
-import { legadoSubscriptionStore } from './legado/subscription-store';
+import { getCurrentSiteId } from './site-context';
 
 interface ResolvedLegadoConfig {
   enabled: boolean;

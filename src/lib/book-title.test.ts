@@ -1,6 +1,6 @@
 import {
-  PLACEHOLDER_BOOK_TITLE,
   isPlaceholderBookTitle,
+  PLACEHOLDER_BOOK_TITLE,
   resolveBookTitle,
   withBookNames,
 } from '@/lib/book-title';
