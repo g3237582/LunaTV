@@ -89,10 +89,14 @@ export class BookProvider {
     return legadoClient.getChapters(sourceId, href);
   }
 
-  async getChaptersByBookId(sourceId: string, bookId: string): Promise<BookChapter[]> {
+  async getChaptersByBookId(
+    sourceId: string,
+    bookId: string,
+    options?: { detailHref?: string }
+  ): Promise<BookChapter[]> {
     const source = await this.getSourceById(sourceId);
     assertChaptersSupported(source);
-    return legadoClient.getChaptersByBookId(sourceId, bookId);
+    return legadoClient.getChaptersByBookId(sourceId, bookId, options);
   }
 
   async getChapterContent(sourceId: string, href: string, tocHref?: string): Promise<BookChapterContent> {

@@ -51,6 +51,49 @@ export function assertChaptersSupported(source: Pick<BookSource, 'type' | 'legad
   }
 }
 
+export type BookChaptersRequest =
+  | { mode: 'toc'; href: string }
+  | { mode: 'detail'; bookId: string; detailHref?: string }
+  | { mode: 'missing' };
+
+function cleanQuery(value?: string | null) {
+  return value?.trim() || '';
+}
+
+/**
+ * 章节目录定位。
+ * `tocHref` 是已经解析好的目录地址。
+ * `bookId` 可能只是书源 JSON 里的数字/哈希，这时用 `detailHref`，或和 bookId 一起传来的 `href`（搜索结果详情地址）打开详情再取目录。
+ * 仅有 `href`、没有 bookId 时保持旧行为：把它当作目录地址。
+ */
+export function resolveBookChaptersRequest(input: {
+  bookId?: string | null;
+  href?: string | null;
+  detailHref?: string | null;
+  tocHref?: string | null;
+}): BookChaptersRequest {
+  const bookId = cleanQuery(input.bookId);
+  const href = cleanQuery(input.href);
+  const detailHref = cleanQuery(input.detailHref);
+  const tocHref = cleanQuery(input.tocHref);
+
+  if (tocHref) return { mode: 'toc', href: tocHref };
+  if (bookId) {
+    const fallback = detailHref || href;
+    return { mode: 'detail', bookId, detailHref: fallback || undefined };
+  }
+  if (detailHref) return { mode: 'detail', bookId: detailHref, detailHref };
+  if (href) return { mode: 'toc', href };
+  return { mode: 'missing' };
+}
+
+export function buildBookChaptersPath(sourceId: string, bookId: string, detailHref?: string) {
+  const params = new URLSearchParams({ sourceId, bookId });
+  const href = detailHref?.trim();
+  if (href) params.set('detailHref', href);
+  return `/api/books/read/chapters?${params.toString()}`;
+}
+
 export function bookReadError(error: unknown): { status: number; body: Record<string, unknown> } {
   if (error instanceof BookChaptersNotApplicableError) {
     return { status: error.status, body: error.payload };

@@ -4,8 +4,10 @@ import {
   BookChaptersNotApplicableError,
   bookReadError,
   bookSourceKind,
+  buildBookChaptersPath,
   CHAPTERS_NOT_APPLICABLE_CODE,
   chaptersNotApplicablePayload,
+  resolveBookChaptersRequest,
 } from '@/lib/book-chapters';
 
 function opdsSource(partial: Partial<BookSource> = {}): BookSource {
@@ -75,6 +77,48 @@ describe('OPDS chapters rejection path', () => {
 
   it('allows Legado sources through so chapter lookup can run', () => {
     expect(() => assertChaptersSupported(legadoSource())).not.toThrow();
+  });
+
+  it('keeps an opaque bookId and uses the search detail href as the TOC fallback', () => {
+    expect(
+      resolveBookChaptersRequest({
+        bookId: '377259',
+        href: 'https://books.example/info/santi',
+      })
+    ).toEqual({
+      mode: 'detail',
+      bookId: '377259',
+      detailHref: 'https://books.example/info/santi',
+    });
+    expect(
+      resolveBookChaptersRequest({
+        bookId: '377259',
+        detailHref: 'https://books.example/info/santi',
+        href: 'https://books.example/toc/santi',
+      })
+    ).toEqual({
+      mode: 'detail',
+      bookId: '377259',
+      detailHref: 'https://books.example/info/santi',
+    });
+  });
+
+  it('treats tocHref as a direct chapter list and href-only as the legacy TOC url', () => {
+    expect(resolveBookChaptersRequest({ bookId: '377259', tocHref: 'https://books.example/toc/santi' })).toEqual({
+      mode: 'toc',
+      href: 'https://books.example/toc/santi',
+    });
+    expect(resolveBookChaptersRequest({ href: 'https://books.example/toc/santi' })).toEqual({
+      mode: 'toc',
+      href: 'https://books.example/toc/santi',
+    });
+    expect(resolveBookChaptersRequest({})).toEqual({ mode: 'missing' });
+  });
+
+  it('puts detailHref on the chapters URL so clients can recover when bookId is opaque', () => {
+    expect(buildBookChaptersPath('legado_1', '377259', 'https://books.example/info/santi')).toBe(
+      '/api/books/read/chapters?sourceId=legado_1&bookId=377259&detailHref=https%3A%2F%2Fbooks.example%2Finfo%2Fsanti'
+    );
   });
 
   it('maps ordinary failures to 500 without claiming the source is missing', () => {

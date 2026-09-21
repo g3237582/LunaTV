@@ -54,6 +54,7 @@ const legadoConfigCache = new Map<
   { fingerprint: string; expiresAt: number; data: ResolvedLegadoConfig }
 >();
 const searchCache = new Map<string, { expiresAt: number; data: BookListItem[] }>();
+const bookDetailHrefCache = new Map<string, { expiresAt: number; detailHref: string }>();
 const detailCache = new Map<string, { expiresAt: number; data: BookDetail }>();
 const tocCache = new Map<string, { expiresAt: number; data: BookChapter[] }>();
 const chapterCache = new Map<string, { expiresAt: number; data: BookChapterContent }>();
@@ -1417,11 +1418,45 @@ function getRule(source: BookSource): LegadoBookSourceRule {
   return resolveLegadoRule(source.legado, source) || source.legado;
 }
 
+function isDirectBookLocator(value?: string) {
+  const trimmed = (value || '').trim();
+  return /^https?:\/\//i.test(trimmed) || trimmed.startsWith('/');
+}
+
+function rememberBookDetailHref(sourceId: string, bookId: string | undefined, detailHref: string, ttl: number) {
+  const id = (bookId || '').trim();
+  const href = detailHref.trim();
+  if (!id || !isDirectBookLocator(href) || id === href) return;
+  bookDetailHrefCache.set(`${sourceId}\n${id}`, { detailHref: href, expiresAt: Date.now() + ttl });
+}
+
+function readRememberedDetailHref(sourceId: string, bookId: string) {
+  const key = `${sourceId}\n${bookId}`;
+  const hit = bookDetailHrefCache.get(key);
+  if (!hit || hit.expiresAt <= Date.now()) {
+    if (hit) bookDetailHrefCache.delete(key);
+    return '';
+  }
+  return hit.detailHref;
+}
+
+function indexBookLocators(sourceId: string, detailHref: string, rawIds: Array<string | undefined>, ttl: number) {
+  const href = detailHref.trim();
+  if (!isDirectBookLocator(href)) return;
+  rawIds.forEach((rawId) => rememberBookDetailHref(sourceId, rawId, href, ttl));
+  // 旧客户端拿到的是 sourceId|detailHref 的哈希，搜索命中后仍可用这个哈希找回详情。
+  rememberBookDetailHref(sourceId, stableId(`${sourceId}|${href}`), href, ttl);
+}
+
 function makeItem(source: BookSource, partial: Partial<BookListItem> & { detailHref?: string; title?: string; name?: string }): BookListItem {
   const detailHref = partial.detailHref || '';
   const title = resolveBookTitle(partial.title, partial.name);
+  // JSON 书源经常带数字 id。能直接打开的详情地址才是章节查询的定位符，优先用它，避免哈希掉 detailHref。
+  const id = isDirectBookLocator(detailHref)
+    ? detailHref
+    : partial.id || stableId(`${source.id}|${detailHref || title || Date.now()}`);
   return {
-    id: partial.id || stableId(`${source.id}|${detailHref || title || Date.now()}`),
+    id,
     sourceId: source.id,
     sourceName: source.name,
     ...withBookNames(title),
@@ -1592,6 +1627,7 @@ export class LegadoClient {
             detailHref,
             tags: readJsonRule(item, rule.ruleSearch?.kind, source, targetUrl).split(/[,，\s]+/).filter(Boolean),
           }));
+          indexBookLocators(source.id, detailHref, [itemId], cacheTTL);
         });
       } else if (searchBookListRule.trim().startsWith(':')) {
         const items = readAllInOneList(html, searchBookListRule);
@@ -1613,6 +1649,7 @@ export class LegadoClient {
             detailHref,
             tags: readRegexItem(item, rule.ruleSearch?.kind, targetUrl).split(/[,，\s]+/).filter(Boolean),
           }));
+          indexBookLocators(source.id, detailHref, [], cacheTTL);
         });
       } else {
         const $ = cheerio.load(html);
@@ -1636,6 +1673,7 @@ export class LegadoClient {
             detailHref,
             tags: readValue($, root, rule.ruleSearch?.kind, targetUrl).split(/[,，\s]+/).filter(Boolean),
           }));
+          indexBookLocators(source.id, detailHref, [], cacheTTL);
         });
       }
       if (pageCount === 0) break;
@@ -1661,6 +1699,7 @@ export class LegadoClient {
 
   async getCatalog(sourceId: string, href?: string): Promise<BookCatalogResult> {
     const source = await getSourceById(sourceId);
+    const { cacheTTL } = await resolveLegadoConfig();
     const rule = getRule(source);
     if (!hasExplore(rule)) {
       return { sourceId: source.id, sourceName: source.name, title: source.name, href: href || source.url, entries: [], navigation: [] };
@@ -1696,8 +1735,9 @@ export class LegadoClient {
         const title = readJsonRule(item, exploreRule?.name, source, targetUrl);
         if (!title && !detailHref) return;
         const cover = readJsonRule(item, exploreRule?.coverUrl, source, targetUrl);
+        const rawId = jsonPrimitiveToString(item?.id) || undefined;
         entries.push(makeItem(source, {
-          id: jsonPrimitiveToString(item?.id) || detailHref || undefined,
+          id: rawId || detailHref || undefined,
           title,
           name: jsonPrimitiveToString(item?.name) || jsonPrimitiveToString(item?.title) || title,
           author: readJsonRule(item, exploreRule?.author, source, targetUrl),
@@ -1706,6 +1746,7 @@ export class LegadoClient {
           detailHref,
           tags: readJsonRule(item, exploreRule?.kind, source, targetUrl).split(/[,，\s]+/).filter(Boolean),
         }));
+        indexBookLocators(source.id, detailHref, [rawId], cacheTTL);
       });
     } else {
       const $ = cheerio.load(html);
@@ -1726,6 +1767,7 @@ export class LegadoClient {
           detailHref,
           tags: readValue($, root, exploreRule?.kind, targetUrl).split(/[,，\s]+/).filter(Boolean),
         }));
+        indexBookLocators(source.id, detailHref, [], cacheTTL);
       });
     }
 
@@ -1742,12 +1784,12 @@ export class LegadoClient {
     };
   }
 
-  async getChaptersByBookId(sourceId: string, bookId: string): Promise<BookChapter[]> {
+  async getChaptersByBookId(sourceId: string, bookId: string, options?: { detailHref?: string }): Promise<BookChapter[]> {
     const source = await getSourceById(sourceId);
     const rule = getRule(source);
     const base = sourceBase(source);
     const searchBookUrlRule = rule.ruleSearch?.bookUrl || '';
-    const detailHref = /^https?:\/\//i.test(bookId) || bookId.startsWith('/')
+    const fromBookId = /^https?:\/\//i.test(bookId) || bookId.startsWith('/')
       ? normalizeUrl(base, bookId)
       : /\{\{\s*(?:\$\.id|id)\s*\}\}|\{id\}/.test(searchBookUrlRule)
         ? normalizeUrl(base, searchBookUrlRule
@@ -1755,6 +1797,9 @@ export class LegadoClient {
           .replace(/\{\{\s*id\s*\}\}/g, encodeURIComponent(bookId))
           .replace(/\{id\}/g, encodeURIComponent(bookId)))
         : '';
+    const explicitRaw = options?.detailHref?.trim() || '';
+    const explicit = explicitRaw ? normalizeUrl(base, explicitRaw) : '';
+    const detailHref = fromBookId || (isDirectBookLocator(explicit) ? explicit : '') || readRememberedDetailHref(sourceId, bookId);
     if (!detailHref) throw new Error('该 Legado 书源无法通过 bookId 定位详情，请重新搜索后打开');
     const detail = await this.getBookDetail(sourceId, detailHref, { id: bookId, detailHref });
     const tocHref = detail.acquisitionLinks.find((item) => item.rel === 'legado:chapters' || item.type.toLowerCase().includes('legado-chapters'))?.href;

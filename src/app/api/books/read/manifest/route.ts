@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { BookAcquisitionLink } from '@/lib/book.types';
-import { db } from '@/lib/db';
+import { buildBookChaptersPath } from '@/lib/book-chapters';
 import { bookProvider } from '@/lib/book-provider';
+import { db } from '@/lib/db';
 
 import { getAuthorizedBooksUsername } from '../../_utils';
 
@@ -71,7 +72,7 @@ async function resolveManifest(username: string, payload: ManifestPayload) {
       book: detail,
       format: preferred.format,
       fileUrl: preferred.format === 'chapters' ? undefined : `/api/books/file?sourceId=${encodeURIComponent(sourceId)}&bookId=${encodeURIComponent(detail.id)}&format=${encodeURIComponent(preferred.format)}`,
-      chaptersUrl: preferred.format === 'chapters' ? `/api/books/read/chapters?sourceId=${encodeURIComponent(sourceId)}&bookId=${encodeURIComponent(detail.id)}` : undefined,
+      chaptersUrl: preferred.format === 'chapters' ? buildBookChaptersPath(sourceId, detail.id, detail.detailHref) : undefined,
       acquisitionHref: preferred.href,
       cacheKey: `${sourceId}::${detail.id}::${preferred.format}`,
       coverUrl: detail.cover,

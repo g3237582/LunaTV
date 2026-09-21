@@ -917,11 +917,12 @@ function ChapterReader({ manifest }: { manifest: BookReadManifest }) {
       manifest.lastRecord?.locator?.value || '';
     setLoading(true);
     setError('');
-    const url =
-      manifest.chaptersUrl ||
-      `/api/books/read/chapters?sourceId=${encodeURIComponent(
-        manifest.book.sourceId
-      )}&bookId=${encodeURIComponent(manifest.book.id)}`;
+    const fallbackChapters = new URLSearchParams({
+      sourceId: manifest.book.sourceId,
+      bookId: manifest.book.id,
+    });
+    if (manifest.book.detailHref) fallbackChapters.set('detailHref', manifest.book.detailHref);
+    const url = manifest.chaptersUrl || `/api/books/read/chapters?${fallbackChapters.toString()}`;
     fetchJsonWithRetry<{ chapters?: BookChapter[] }>(url, { cache: 'no-store' })
       .then((json) => {
         if (cancelled) return;
