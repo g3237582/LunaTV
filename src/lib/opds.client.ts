@@ -1,6 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { parseStringPromise } from 'xml2js';
 
+import { isPlaceholderBookTitle, resolveBookTitle, withBookNames } from './book-title';
+import {
+  BookAcquisitionLink,
+  BookCatalogResult,
+  BookDetail,
+  BookListItem,
+  BookSearchFailure,
+  BookSearchResult,
+  BookSource,
+  BookSourceCapabilities,
+} from './book.types';
 import { getConfig } from './config';
 import {
   isAcquisitionRel,
@@ -12,16 +23,6 @@ import {
   resolveOpdsAuthor,
   toBookCoverSrc,
 } from './opds-entry';
-import {
-  BookAcquisitionLink,
-  BookCatalogResult,
-  BookDetail,
-  BookListItem,
-  BookSearchFailure,
-  BookSearchResult,
-  BookSource,
-  BookSourceCapabilities,
-} from './book.types';
 
 interface ResolvedOPDSConfig {
   enabled: boolean;
@@ -134,7 +135,7 @@ function mapEntryToItem(source: BookSource, entry: ParsedFeedEntry): BookListIte
     id: entry.id || pickDetailHref(entry.links) || acquisitionLinks[0]?.href || entry.title,
     sourceId: source.id,
     sourceName: source.name,
-    title: entry.title || '未命名电子书',
+    ...withBookNames(resolveBookTitle(entry.title)),
     author: resolveOpdsAuthor(entry),
     cover: toBookCoverSrc(source.id, resolveCoverHref(entry.links)),
     summary: entry.summary || entry.content || undefined,
@@ -481,48 +482,52 @@ export class OPDSClient {
   async getBookDetail(sourceId: string, href: string, fallback?: Partial<BookDetail>): Promise<BookDetail> {
     const source = await getSourceById(sourceId);
     if (!href) {
-      if (!fallback?.title) throw new Error('缺少详情链接');
+      const fallbackTitle = resolveBookTitle(fallback?.title, fallback?.name);
+      if (isPlaceholderBookTitle(fallbackTitle)) throw new Error('缺少详情链接');
       return {
-        id: fallback.id || `${sourceId}:${fallback.title}`,
+        id: fallback?.id || `${sourceId}:${fallbackTitle}`,
         sourceId,
         sourceName: source.name,
-        title: fallback.title,
-        author: fallback.author,
-        cover: fallback.cover,
-        summary: fallback.summary,
-        acquisitionLinks: fallback.acquisitionLinks || [],
-        detailHref: fallback.detailHref,
-        tags: fallback.tags,
-        categories: fallback.categories,
-        navigation: fallback.navigation || [],
+        ...withBookNames(fallbackTitle),
+        author: fallback?.author,
+        cover: fallback?.cover,
+        summary: fallback?.summary,
+        acquisitionLinks: fallback?.acquisitionLinks || [],
+        detailHref: fallback?.detailHref,
+        tags: fallback?.tags,
+        categories: fallback?.categories,
+        navigation: fallback?.navigation || [],
       } as BookDetail;
     }
 
     const feed = await getFeed(source, href);
     const entry = feed.entries[0];
     if (!entry) {
-      if (fallback?.title) {
+      const fallbackTitle = resolveBookTitle(fallback?.title, fallback?.name);
+      if (!isPlaceholderBookTitle(fallbackTitle)) {
         return {
-          id: fallback.id || href,
+          id: fallback?.id || href,
           sourceId,
           sourceName: source.name,
-          title: fallback.title,
-          author: fallback.author,
-          cover: fallback.cover,
-          summary: fallback.summary,
-          acquisitionLinks: fallback.acquisitionLinks || [],
+          ...withBookNames(fallbackTitle),
+          author: fallback?.author,
+          cover: fallback?.cover,
+          summary: fallback?.summary,
+          acquisitionLinks: fallback?.acquisitionLinks || [],
           detailHref: href,
-          tags: fallback.tags,
-          categories: fallback.categories,
-          navigation: fallback.navigation || [],
+          tags: fallback?.tags,
+          categories: fallback?.categories,
+          navigation: fallback?.navigation || [],
         } as BookDetail;
       }
       throw new Error('详情页没有可用书籍条目');
     }
 
     const detail = mapEntryToDetail(source, entry);
+    const title = resolveBookTitle(detail.title, detail.name, fallback?.title, fallback?.name);
     return {
       ...detail,
+      ...withBookNames(title),
       detailHref: href,
       summary: detail.summary || feed.subtitle || fallback?.summary,
       acquisitionLinks: detail.acquisitionLinks.length > 0 ? detail.acquisitionLinks : fallback?.acquisitionLinks || [],

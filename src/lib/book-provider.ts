@@ -1,5 +1,8 @@
+import { assertChaptersSupported, bookSourceKind } from './book-chapters';
 import {
   BookCatalogResult,
+  BookChapter,
+  BookChapterContent,
   BookDetail,
   BookListItem,
   BookSearchFailure,
@@ -9,8 +12,8 @@ import {
 import { legadoClient } from './legado.client';
 import { opdsClient } from './opds.client';
 
-function sourceKind(source?: Pick<BookSource, 'type'>) {
-  return source?.type === 'legado' || (source as BookSource | undefined)?.legado ? 'legado' : 'opds';
+function sourceKind(source?: Pick<BookSource, 'type' | 'legado'>) {
+  return bookSourceKind(source);
 }
 
 export class BookProvider {
@@ -78,6 +81,24 @@ export class BookProvider {
       return { format: 'chapters', href: chapters.href };
     }
     return opdsClient.getPreferredAcquisition(sourceId, href);
+  }
+
+  async getChapters(sourceId: string, href: string): Promise<BookChapter[]> {
+    const source = await this.getSourceById(sourceId);
+    assertChaptersSupported(source);
+    return legadoClient.getChapters(sourceId, href);
+  }
+
+  async getChaptersByBookId(sourceId: string, bookId: string): Promise<BookChapter[]> {
+    const source = await this.getSourceById(sourceId);
+    assertChaptersSupported(source);
+    return legadoClient.getChaptersByBookId(sourceId, bookId);
+  }
+
+  async getChapterContent(sourceId: string, href: string, tocHref?: string): Promise<BookChapterContent> {
+    const source = await this.getSourceById(sourceId);
+    assertChaptersSupported(source);
+    return legadoClient.getChapterContent(sourceId, href, tocHref);
   }
 }
 

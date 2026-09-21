@@ -21,6 +21,8 @@ import {
   LegadoBookSourceRule,
   LegadoRuleSearch,
 } from './book.types';
+import { resolveBookTitle, withBookNames } from './book-title';
+import { formatLegadoHttpError, rewriteLegadoFetchError } from './legado-http-error';
 import { applyLegadoPageRule } from './legado-page-rule';
 import { asLiteralLegadoValue } from './legado-rule-value';
 import {
@@ -140,6 +142,24 @@ function resolveLegadoSource(source: BookSource): BookSource {
     legado: rule,
   };
   return resolveLegadoDynamicValue(resolved, { baseUrl: source.url || rule?.bookSourceUrl || '', source: rule || source.legado || source });
+}
+
+function pageReferer(source: BookSource, url: string): string {
+  try {
+    return `${new URL(url).origin}/`;
+  } catch {
+    try {
+      return `${new URL(sourceBase(source)).origin}/`;
+    } catch {
+      return '';
+    }
+  }
+}
+
+function ensureRequestReferer(headers: Record<string, string>, source: BookSource, url: string) {
+  if (headers.Referer || headers.referer) return;
+  const referer = pageReferer(source, url);
+  if (referer) headers.Referer = referer;
 }
 
 function buildHeaders(source: BookSource): HeadersInit {
@@ -1284,6 +1304,7 @@ async function fetchText(source: BookSource, url: string): Promise<string> {
         ...(buildHeaders(source) as Record<string, string>),
         ...(request.headers || {}),
       };
+      ensureRequestReferer(headers, source, request.url);
       const cookie = getCookieHeader(source.id);
       if (source.legado?.enabledCookieJar && cookie) headers.Cookie = cookie;
       const method = (request.method || (request.body ? 'POST' : 'GET')).toUpperCase();
@@ -1295,7 +1316,7 @@ async function fetchText(source: BookSource, url: string): Promise<string> {
         cache: 'no-store',
       });
       if (source.legado?.enabledCookieJar) mergeSetCookie(source.id, response.headers.get('set-cookie'));
-      if (!response.ok) throw new Error(`请求失败: ${response.status}`);
+      if (!response.ok) throw new Error(formatLegadoHttpError(response.status));
       const contentLength = Number(response.headers.get('content-length') || '0');
       if (contentLength > MAX_TEXT_BYTES) throw new Error('响应内容过大');
       const buffer = await response.arrayBuffer();
@@ -1339,6 +1360,7 @@ async function fetchBytes(source: BookSource, url: string, referer?: string): Pr
         Accept: 'application/zip,application/octet-stream,text/plain,*/*',
       };
       if (referer) headers.Referer = referer;
+      ensureRequestReferer(headers, source, request.url);
       const cookie = getCookieHeader(source.id);
       if (source.legado?.enabledCookieJar && cookie) headers.Cookie = cookie;
       const method = (request.method || (request.body ? 'POST' : 'GET')).toUpperCase();
@@ -1350,7 +1372,7 @@ async function fetchBytes(source: BookSource, url: string, referer?: string): Pr
         cache: 'no-store',
       });
       if (source.legado?.enabledCookieJar) mergeSetCookie(source.id, response.headers.get('set-cookie'));
-      if (!response.ok) throw new Error(`请求失败: ${response.status}`);
+      if (!response.ok) throw new Error(formatLegadoHttpError(response.status));
       const contentLength = Number(response.headers.get('content-length') || '0');
       if (contentLength > MAX_ARCHIVE_BYTES) throw new Error('响应内容过大');
       const buffer = new Uint8Array(await response.arrayBuffer());
@@ -1395,13 +1417,14 @@ function getRule(source: BookSource): LegadoBookSourceRule {
   return resolveLegadoRule(source.legado, source) || source.legado;
 }
 
-function makeItem(source: BookSource, partial: Partial<BookListItem> & { detailHref?: string; title?: string }): BookListItem {
+function makeItem(source: BookSource, partial: Partial<BookListItem> & { detailHref?: string; title?: string; name?: string }): BookListItem {
   const detailHref = partial.detailHref || '';
+  const title = resolveBookTitle(partial.title, partial.name);
   return {
-    id: partial.id || stableId(`${source.id}|${detailHref || partial.title || Date.now()}`),
+    id: partial.id || stableId(`${source.id}|${detailHref || title || Date.now()}`),
     sourceId: source.id,
     sourceName: source.name,
-    title: partial.title || '未命名电子书',
+    ...withBookNames(title),
     author: partial.author,
     cover: toBookCoverSrc(source.id, partial.cover, 'image'),
     summary: partial.summary,
@@ -1562,6 +1585,7 @@ export class LegadoClient {
           results.push(makeItem(source, {
             id: itemId,
             title,
+            name: jsonPrimitiveToString(item?.name) || jsonPrimitiveToString(item?.title) || title,
             author: readJsonRule(item, rule.ruleSearch?.author, source, targetUrl),
             summary: readJsonRule(item, rule.ruleSearch?.intro, source, targetUrl),
             cover: cover || undefined,
@@ -1675,6 +1699,7 @@ export class LegadoClient {
         entries.push(makeItem(source, {
           id: jsonPrimitiveToString(item?.id) || detailHref || undefined,
           title,
+          name: jsonPrimitiveToString(item?.name) || jsonPrimitiveToString(item?.title) || title,
           author: readJsonRule(item, exploreRule?.author, source, targetUrl),
           summary: readJsonRule(item, exploreRule?.intro, source, targetUrl),
           cover: cover || undefined,
@@ -1744,7 +1769,11 @@ export class LegadoClient {
     const cacheKey = `detail|${source.id}|${detailHref}`;
     const { cacheTTL } = await resolveLegadoConfig();
     const cached = detailCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) return { ...cached.data, ...(!href && fallback ? fallback : {}) };
+    if (cached && cached.expiresAt > Date.now()) {
+      const merged = { ...cached.data, ...(!href && fallback ? fallback : {}) };
+      const title = resolveBookTitle(merged.title, merged.name, fallback?.title, fallback?.name, cached.data.title);
+      return { ...merged, ...withBookNames(title) };
+    }
 
     let detail: BookDetail | null = null;
     if (detailHref && rule.ruleBookInfo) {
@@ -1762,7 +1791,12 @@ export class LegadoClient {
           : readValue($ as cheerio.CheerioAPI, root as cheerio.Cheerio<any>, itemRule, targetUrl);
       const tocUrl = read(rule.ruleBookInfo.tocUrl) || (rule.tocUrl ? buildUrlFromTemplate(rule.tocUrl, source, undefined, 1, detailHref).replace(/\{bookUrl\}/g, encodeURIComponent(detailHref)) : targetUrl);
       const cover = read(rule.ruleBookInfo.coverUrl) || fallback?.cover;
-      const title = read(rule.ruleBookInfo.name) || fallback?.title || '未命名电子书';
+      const title = resolveBookTitle(
+        read(rule.ruleBookInfo.name),
+        json ? jsonPrimitiveToString((json as any)?.name) || jsonPrimitiveToString((json as any)?.data?.name) : '',
+        fallback?.title,
+        fallback?.name
+      );
       const chapterCountText = json
         ? jsonPrimitiveToString(readJsonPath(json, '@json:$.data.nums') ?? readJsonPath(json, '@json:$.data.chapter_nums'))
         : '';
@@ -1773,7 +1807,7 @@ export class LegadoClient {
         id: fallback?.id || stableId(`${source.id}|${detailHref || title}`),
         sourceId,
         sourceName: source.name,
-        title,
+        ...withBookNames(title),
         author: read(rule.ruleBookInfo.author) || fallback?.author,
         cover: toBookCoverSrc(sourceId, cover, 'image'),
         summary: read(rule.ruleBookInfo.intro) || fallback?.summary,
@@ -1788,10 +1822,10 @@ export class LegadoClient {
     if (!detail) {
       const tocUrl = fallback?.acquisitionLinks?.[0]?.href || detailHref;
       detail = {
-        id: fallback?.id || stableId(`${source.id}|${detailHref || fallback?.title || ''}`),
+        id: fallback?.id || stableId(`${source.id}|${detailHref || fallback?.title || fallback?.name || ''}`),
         sourceId,
         sourceName: source.name,
-        title: fallback?.title || '未命名电子书',
+        ...withBookNames(resolveBookTitle(fallback?.title, fallback?.name)),
         author: fallback?.author,
         cover: toBookCoverSrc(sourceId, fallback?.cover, 'image'),
         summary: fallback?.summary,
@@ -1814,7 +1848,9 @@ export class LegadoClient {
     if (cached && cached.expiresAt > Date.now()) return cached.data;
 
     const targetUrl = normalizeUrl(sourceBase(source), tocHref);
-    const html = await fetchText(source, targetUrl);
+    const html = await fetchText(source, targetUrl).catch((error) => {
+      throw rewriteLegadoFetchError(error, 'toc');
+    });
     try {
       const textChapters = await tryTextDownloadChapters(source, html, targetUrl);
       if (textChapters.length > 0) {
@@ -1925,7 +1961,9 @@ export class LegadoClient {
     const visited = new Set<string>();
     for (let page = 0; page < 8 && pageUrl && !visited.has(pageUrl); page += 1) {
       visited.add(pageUrl);
-      const html = await fetchText(source, pageUrl);
+      const html = await fetchText(source, pageUrl).catch((error) => {
+        throw rewriteLegadoFetchError(error, 'content');
+      });
       const part = chapterContentFromRule(html, rule.ruleContent.content, pageUrl);
       if (part) parts.push(part);
       const next = rule.ruleContent.nextContentUrl ? contentFromRule(html, rule.ruleContent.nextContentUrl, pageUrl) : '';
