@@ -9861,6 +9861,7 @@ const ThemeConfigComponent = ({
     progressThumbPresetId: '',
     progressThumbCustomUrl: '',
     loadingStyle: 'talisman' as 'classic' | 'grid' | 'talisman',
+    rateBadgeStyle: 'flag' as 'default' | 'flag' | 'medal',
   });
   const [loginBackgroundImages, setLoginBackgroundImages] = useState<string[]>([
     '',
@@ -9884,6 +9885,7 @@ const ThemeConfigComponent = ({
         progressThumbPresetId: config.ThemeConfig.progressThumbPresetId || '',
         progressThumbCustomUrl: config.ThemeConfig.progressThumbCustomUrl || '',
         loadingStyle: config.ThemeConfig.loadingStyle || 'talisman',
+        rateBadgeStyle: config.ThemeConfig.rateBadgeStyle || 'flag',
       });
 
       // 解析背景图配置
@@ -10721,6 +10723,152 @@ const ThemeConfigComponent = ({
                 </span>
               </div>
               {themeSettings.loadingStyle === opt.id && (
+                <div className='absolute top-2 right-2'>
+                  <Check className='w-5 h-5 text-blue-600 dark:text-blue-400' />
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 评分星标样式配置 */}
+      <div className='bg-white dark:bg-gray-800 rounded-lg p-6 border border-gray-200 dark:border-gray-700'>
+        <h3 className='text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center gap-2'>
+          <Video className='w-5 h-5' />
+          评分星标样式
+        </h3>
+        <p className='text-sm text-gray-600 dark:text-gray-400 mb-4'>
+          视频卡片右上角评分徽章的款式
+        </p>
+
+        <div className='grid grid-cols-1 sm:grid-cols-3 gap-3'>
+          {(
+            [
+              {
+                id: 'default',
+                name: '圆点',
+                desc: '',
+                preview: (
+                  <div className='w-9 h-9 rounded-full bg-pink-500 text-white text-xs font-bold flex items-center justify-center shadow-md'>
+                    8.5
+                  </div>
+                ),
+              },
+              {
+                id: 'flag',
+                name: '锦旗',
+                desc: '默认',
+                preview: (
+                  <div
+                    className='w-8 flex flex-col items-center pt-1 pb-2 text-[#4a2600] font-extrabold text-sm'
+                    style={{
+                      background:
+                        'linear-gradient(180deg,#ffd54a,#ff8a3d)',
+                      clipPath:
+                        'polygon(0 0,100% 0,100% 100%,50% 84%,0 100%)',
+                    }}
+                  >
+                    <span className='flex gap-[1px] mb-[1px]'>
+                      {Array.from({ length: 3 }).map((_, i) => (
+                        <svg
+                          key={i}
+                          viewBox='0 0 24 24'
+                          className='w-2 h-2'
+                          fill='#4a2600'
+                        >
+                          <path d='M12 2l2.9 6.3 6.9.7-5.1 4.6 1.4 6.8L12 17.8 5.9 20.4l1.4-6.8L2.2 9l6.9-.7z' />
+                        </svg>
+                      ))}
+                    </span>
+                    8.5
+                  </div>
+                ),
+              },
+              {
+                id: 'medal',
+                name: '勋章',
+                desc: '',
+                preview: (
+                  <div className='flex flex-col items-center'>
+                    <div className='relative w-6 h-4 -mb-2'>
+                      <i
+                        className='absolute left-0 top-0 w-2.5 h-4 -rotate-6 bg-[#ff8a3d] block'
+                        style={{
+                          clipPath:
+                            'polygon(0 0,100% 0,100% 100%,50% 72%,0 100%)',
+                        }}
+                      />
+                      <i
+                        className='absolute right-0 top-0 w-2.5 h-4 rotate-6 bg-[#ff8a3d] block'
+                        style={{
+                          clipPath:
+                            'polygon(0 0,100% 0,100% 100%,50% 72%,0 100%)',
+                        }}
+                      />
+                    </div>
+                    <div
+                      className='relative z-10 w-8 h-8 rounded-full flex flex-col items-center justify-center text-[#4a2600] font-extrabold text-[11px] leading-none border-2 border-white/70'
+                      style={{
+                        background:
+                          'linear-gradient(135deg,#ffd54a,#ff8a3d)',
+                      }}
+                    >
+                      <span className='flex flex-col items-center -mb-[1px]'>
+                        <span className='flex'>
+                          <svg
+                            viewBox='0 0 24 24'
+                            className='w-1.5 h-1.5'
+                            fill='#4a2600'
+                          >
+                            <path d='M12 2l2.9 6.3 6.9.7-5.1 4.6 1.4 6.8L12 17.8 5.9 20.4l1.4-6.8L2.2 9l6.9-.7z' />
+                          </svg>
+                        </span>
+                        <span className='flex gap-[1px]'>
+                          {Array.from({ length: 2 }).map((_, i) => (
+                            <svg
+                              key={i}
+                              viewBox='0 0 24 24'
+                              className='w-1.5 h-1.5'
+                              fill='#4a2600'
+                            >
+                              <path d='M12 2l2.9 6.3 6.9.7-5.1 4.6 1.4 6.8L12 17.8 5.9 20.4l1.4-6.8L2.2 9l6.9-.7z' />
+                            </svg>
+                          ))}
+                        </span>
+                      </span>
+                      8.5
+                    </div>
+                  </div>
+                ),
+              },
+            ] as const
+          ).map((opt) => (
+            <button
+              key={opt.id}
+              type='button'
+              onClick={() =>
+                setThemeSettings((prev) => ({
+                  ...prev,
+                  rateBadgeStyle: opt.id,
+                }))
+              }
+              className={`relative p-4 border-2 rounded-lg transition-all ${
+                themeSettings.rateBadgeStyle === opt.id
+                  ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                  : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
+              }`}
+            >
+              <div className='flex flex-col items-center gap-2'>
+                <div className='w-12 h-12 flex items-center justify-center'>
+                  {opt.preview}
+                </div>
+                <span className='text-sm font-medium text-gray-700 dark:text-gray-300 text-center'>
+                  {opt.name}
+                  {opt.desc ? `（${opt.desc}）` : ''}
+                </span>
+              </div>
+              {themeSettings.rateBadgeStyle === opt.id && (
                 <div className='absolute top-2 right-2'>
                   <Check className='w-5 h-5 text-blue-600 dark:text-blue-400' />
                 </div>

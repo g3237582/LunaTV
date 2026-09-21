@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
       progressThumbPresetId,
       progressThumbCustomUrl,
       loadingStyle,
+      rateBadgeStyle,
     } = body as {
       enableBuiltInTheme: boolean;
       builtInTheme: string;
@@ -54,6 +55,7 @@ export async function POST(request: NextRequest) {
       progressThumbPresetId?: string;
       progressThumbCustomUrl?: string;
       loadingStyle?: 'classic' | 'grid' | 'talisman';
+      rateBadgeStyle?: 'default' | 'flag' | 'medal';
     };
 
     // 参数校验
@@ -154,6 +156,12 @@ export async function POST(request: NextRequest) {
         loadingStyle === 'talisman'
           ? loadingStyle
           : 'talisman',
+      rateBadgeStyle:
+        rateBadgeStyle === 'default' ||
+        rateBadgeStyle === 'flag' ||
+        rateBadgeStyle === 'medal'
+          ? rateBadgeStyle
+          : 'flag',
     };
 
     // 写入数据库

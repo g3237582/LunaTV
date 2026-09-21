@@ -1010,3 +1010,198 @@ html[data-loading-style='grid'] .mtv-err-box {
     transform: scale(2.5);
   }
 }
+
+/* ==================================================================
+   评分星标徽章：视频卡片右上角，锦旗(flag)/勋章(medal) 两款
+   分档配色：hi 高分暖金发光 / mid 主题色 / lo 低分冷灰
+   ================================================================== */
+.mtv-rate {
+  /* 分档色板：mid 走主题色并写死兜底（默认主题变量为空） */
+  --rate-hi-a: #ffd54a;
+  --rate-hi-b: #ff8a3d;
+  --rate-hi-ink: #4a2600;
+  --rate-mid-a: var(--theme-primary, #ec4899);
+  --rate-mid-b: var(--theme-primary-hover, #d6559a);
+  --rate-mid-ink: #ffffff;
+  --rate-lo-a: #9fb0cc;
+  --rate-lo-b: #6b7d9e;
+  --rate-lo-ink: #20283a;
+  font-variant-numeric: tabular-nums;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.mtv-rate svg {
+  display: block;
+}
+
+/* ---------------- 锦旗 flag：从顶边垂下的燕尾旗 ---------------- */
+.mtv-rate-flag {
+  position: absolute;
+  top: 0;
+  right: 8px;
+  z-index: 3;
+  width: 34px;
+  padding: 6px 0 14px;
+  text-align: center;
+  color: #fff;
+  font-weight: 800;
+  font-size: 15px;
+  line-height: 1;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 84%, 0 100%);
+  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.35));
+  transition: filter 0.3s ease-out;
+}
+.mtv-rate-flag .mtv-rate-stars {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  margin-bottom: 3px;
+}
+.mtv-rate-flag .mtv-rate-stars svg {
+  width: 8px;
+  height: 8px;
+}
+.mtv-rate-flag.hi {
+  background: linear-gradient(180deg, var(--rate-hi-a), var(--rate-hi-b));
+  color: var(--rate-hi-ink);
+  filter: drop-shadow(0 0 6px rgba(255, 170, 60, 0.85))
+    drop-shadow(0 3px 5px rgba(0, 0, 0, 0.35));
+}
+.mtv-rate-flag.hi .mtv-rate-stars svg {
+  fill: var(--rate-hi-ink);
+}
+.mtv-rate-flag.mid {
+  background: linear-gradient(180deg, var(--rate-mid-a), var(--rate-mid-b));
+  color: var(--rate-mid-ink);
+}
+.mtv-rate-flag.mid .mtv-rate-stars svg {
+  fill: var(--rate-mid-ink);
+}
+.mtv-rate-flag.lo {
+  background: linear-gradient(180deg, var(--rate-lo-a), var(--rate-lo-b));
+  color: var(--rate-lo-ink);
+}
+.mtv-rate-flag.lo .mtv-rate-stars svg {
+  fill: var(--rate-lo-ink);
+}
+.group:hover .mtv-rate-flag {
+  filter: drop-shadow(0 4px 7px rgba(0, 0, 0, 0.4));
+}
+.group:hover .mtv-rate-flag.hi {
+  filter: drop-shadow(0 0 9px rgba(255, 170, 60, 1))
+    drop-shadow(0 4px 7px rgba(0, 0, 0, 0.4));
+}
+
+/* ---------------- 勋章 medal：圆牌 + 双燕尾垂带，三星金字塔 ---------------- */
+.mtv-rate-medal {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  z-index: 3;
+  width: 34px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.35));
+  transition: filter 0.3s ease-out;
+}
+.mtv-rate-medal .mtv-rate-ribbons {
+  position: relative;
+  width: 26px;
+  height: 20px;
+  margin-bottom: -9px;
+}
+.mtv-rate-medal .mtv-rate-ribbons i {
+  position: absolute;
+  top: 0;
+  width: 11px;
+  height: 20px;
+  display: block;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%);
+}
+.mtv-rate-medal .mtv-rate-ribbons i.l {
+  left: 1px;
+  transform: rotate(-6deg);
+}
+.mtv-rate-medal .mtv-rate-ribbons i.r {
+  right: 1px;
+  transform: rotate(6deg);
+}
+.mtv-rate-medal .mtv-rate-disc {
+  position: relative;
+  z-index: 2;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 800;
+  font-size: 12px;
+  line-height: 1;
+  border: 2px solid rgba(255, 255, 255, 0.7);
+}
+.mtv-rate-medal .mtv-rate-stars {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 1px;
+}
+.mtv-rate-medal .mtv-rate-stars .srow {
+  display: flex;
+  gap: 1px;
+}
+.mtv-rate-medal .mtv-rate-stars svg {
+  width: 6px;
+  height: 6px;
+}
+.mtv-rate-medal.hi .mtv-rate-disc {
+  background: linear-gradient(135deg, var(--rate-hi-a), var(--rate-hi-b));
+  color: var(--rate-hi-ink);
+  box-shadow: 0 0 14px 1px rgba(255, 170, 60, 0.7);
+}
+.mtv-rate-medal.hi .mtv-rate-ribbons i {
+  background: var(--rate-hi-b);
+}
+.mtv-rate-medal.hi .mtv-rate-stars svg {
+  fill: var(--rate-hi-ink);
+}
+.mtv-rate-medal.mid .mtv-rate-disc {
+  background: linear-gradient(135deg, var(--rate-mid-a), var(--rate-mid-b));
+  color: var(--rate-mid-ink);
+}
+.mtv-rate-medal.mid .mtv-rate-ribbons i {
+  background: var(--rate-mid-b);
+}
+.mtv-rate-medal.mid .mtv-rate-stars svg {
+  fill: var(--rate-mid-ink);
+}
+.mtv-rate-medal.lo .mtv-rate-disc {
+  background: linear-gradient(135deg, var(--rate-lo-a), var(--rate-lo-b));
+  color: var(--rate-lo-ink);
+}
+.mtv-rate-medal.lo .mtv-rate-ribbons i {
+  background: var(--rate-lo-b);
+}
+.mtv-rate-medal.lo .mtv-rate-stars svg {
+  fill: var(--rate-lo-ink);
+}
+.group:hover .mtv-rate-medal {
+  transform: scale(1.06);
+}
+
+/* 移动端：卡片小，整体缩小 20%，并再贴近右边缘一半 */
+@media (max-width: 639px) {
+  .mtv-rate-flag,
+  .mtv-rate-medal {
+    right: 2px;
+    transform: scale(0.8);
+    transform-origin: top center;
+  }
+  .group:hover .mtv-rate-medal {
+    transform: scale(0.85);
+  }
+}

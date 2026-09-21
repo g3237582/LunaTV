@@ -106,6 +106,7 @@ export default async function RootLayout({
   let progressThumbPresetId = '';
   let progressThumbCustomUrl = '';
   let loadingStyle = 'talisman';
+  let rateBadgeStyle = 'flag';
   let enableRegistration = false;
   let requireRegistrationInviteCode = false;
   let loginRequireTurnstile = false;
@@ -197,6 +198,13 @@ export default async function RootLayout({
       config.ThemeConfig?.loadingStyle === 'talisman'
         ? config.ThemeConfig.loadingStyle
         : 'talisman';
+    // 白名单兜底：值异常时回落到默认锦旗徽章
+    rateBadgeStyle =
+      config.ThemeConfig?.rateBadgeStyle === 'default' ||
+      config.ThemeConfig?.rateBadgeStyle === 'flag' ||
+      config.ThemeConfig?.rateBadgeStyle === 'medal'
+        ? config.ThemeConfig.rateBadgeStyle
+        : 'flag';
     enableRegistration = config.SiteConfig.EnableRegistration || false;
     requireRegistrationInviteCode =
       config.SiteConfig.RequireRegistrationInviteCode || false;
@@ -356,6 +364,7 @@ export default async function RootLayout({
     NETDISK_TRANSFER_ENABLED: userFeatureAccess.netdisk_transfer,
     NETDISK_TEMP_PLAY_ENABLED: userFeatureAccess.netdisk_temp_play,
     FESTIVE_EFFECT_ENABLED: process.env.FESTIVE_EFFECT_ENABLED === 'true',
+    RATE_BADGE_STYLE: rateBadgeStyle,
   };
 
   return (
