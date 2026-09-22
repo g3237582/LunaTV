@@ -51,6 +51,53 @@ export function assertChaptersSupported(source: Pick<BookSource, 'type' | 'legad
   }
 }
 
+export type BookChaptersRequest =
+  | { mode: 'toc'; href: string }
+  | { mode: 'detail'; bookId: string; detailHref?: string }
+  | { mode: 'missing' };
+
+function cleanQuery(value?: string | null) {
+  return value?.trim() || '';
+}
+
+/**
+ * 章节目录定位。
+ * 有 `detailHref` 时它是主定位符，优先于 `bookId` / `bookUrl` / `href`。
+ * 没有 `detailHref` 时，再用 `bookUrl`，然后才是和 `bookId` 一起传来的 `href`。
+ * `tocHref` 是已经解析好的目录地址。
+ * 仅有 `href`、没有 bookId / detailHref / bookUrl 时，`href` 仍表示目录地址。
+ */
+export function resolveBookChaptersRequest(input: {
+  bookId?: string | null;
+  href?: string | null;
+  detailHref?: string | null;
+  bookUrl?: string | null;
+  tocHref?: string | null;
+}): BookChaptersRequest {
+  const bookId = cleanQuery(input.bookId);
+  const href = cleanQuery(input.href);
+  const detailHref = cleanQuery(input.detailHref);
+  const bookUrl = cleanQuery(input.bookUrl);
+  const tocHref = cleanQuery(input.tocHref);
+
+  if (tocHref) return { mode: 'toc', href: tocHref };
+  if (detailHref) return { mode: 'detail', bookId: bookId || detailHref, detailHref };
+  if (bookId) {
+    const fallback = bookUrl || href;
+    return { mode: 'detail', bookId, detailHref: fallback || undefined };
+  }
+  if (bookUrl) return { mode: 'detail', bookId: bookUrl, detailHref: bookUrl };
+  if (href) return { mode: 'toc', href };
+  return { mode: 'missing' };
+}
+
+export function buildBookChaptersPath(sourceId: string, bookId: string, detailHref?: string) {
+  const params = new URLSearchParams({ sourceId, bookId });
+  const href = detailHref?.trim();
+  if (href) params.set('detailHref', href);
+  return `/api/books/read/chapters?${params.toString()}`;
+}
+
 export function bookReadError(error: unknown): { status: number; body: Record<string, unknown> } {
   if (error instanceof BookChaptersNotApplicableError) {
     return { status: error.status, body: error.payload };

@@ -190,6 +190,7 @@ export default function BookDetailPage() {
       sourceId: detail.sourceId,
       bookId: detail.id,
     });
+    if (detail.detailHref) params.set('detailHref', detail.detailHref);
     fetch(`/api/books/read/chapters?${params.toString()}`, {
       cache: 'no-store',
     })

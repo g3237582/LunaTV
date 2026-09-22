@@ -23,6 +23,8 @@ const customJestConfig = {
     '^@/(.*)$': '<rootDir>/src/$1',
     '^~/(.*)$': '<rootDir>/public/$1',
     '^.+\\.(svg)$': '<rootDir>/src/__mocks__/svg.tsx',
+    // Jest 27 does not read cheerio's package "exports".
+    '^cheerio/slim$': '<rootDir>/node_modules/cheerio/dist/commonjs/slim.js',
   },
 };
 
