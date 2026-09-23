@@ -284,10 +284,22 @@ function PlayPageClient() {
   // 状态变量（State）
   // -----------------------------------------------------------------------------
   const [loading, setLoading] = useState(true);
+  // 初始阶段/文案按入口定：带 source+id 是「获取详情」，directplay 是「准备直链」，
+  // 都不该在首帧闪一下「搜索」（详见 initAll 里对应的赋值点）。
   const [loadingStage, setLoadingStage] = useState<
     'searching' | 'preferring' | 'fetching' | 'ready'
-  >('searching');
-  const [loadingMessage, setLoadingMessage] = useState('正在搜索播放源...');
+  >(() =>
+    searchParams.get('source') && searchParams.get('id')
+      ? 'fetching'
+      : 'searching'
+  );
+  const [loadingMessage, setLoadingMessage] = useState(() =>
+    searchParams.get('source') === 'directplay'
+      ? '🎬 正在准备直链播放...'
+      : searchParams.get('source') && searchParams.get('id')
+        ? '🎬 正在获取视频详情...'
+        : '🔍 正在搜索播放源...'
+  );
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<SearchResult | null>(null);
 
@@ -10242,10 +10254,19 @@ function PlayPageClient() {
       : searchParams.get('source') && searchParams.get('id')
         ? 'detail'
         : 'search';
+  // 优选是否真的会跑：只有开了优选开关，且是搜索入口或带 prefer 标记时才有这一格
+  // （见 initAll 里 5636 一带的判定）。带 source+id 的详情入口默认不优选，
+  // 于是只剩「获取详情 → 就绪」两格，首格进度条正好落在正中。
+  const willPrefer =
+    optimizationEnabled &&
+    loadEntry !== 'direct' &&
+    (loadEntry === 'search' || searchParams.get('prefer') === 'true');
   const loadSteps: LoadingStepKey[] =
     loadEntry === 'direct'
       ? ['direct', 'ready']
-      : [loadEntry, 'prefer', 'ready'];
+      : willPrefer
+        ? [loadEntry, 'prefer', 'ready']
+        : [loadEntry, 'ready'];
   const activeStepKey: LoadingStepKey =
     loadingStage === 'ready'
       ? 'ready'

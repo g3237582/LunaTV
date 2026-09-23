@@ -57,11 +57,12 @@ const clampIdx = (idx: number, len: number) =>
 const runeCountAt = (idx: number, len: number) =>
   len > 0 ? Math.round(((idx + 1) / len) * LOADING_RUNES.length) : 0;
 
-/* 阵底细进度条的填充比例。示例里四阶段量出来是 10/45/78/100 —— 首格先垫一点
- * 底（空着像坏了），中段缓出，末格到底；这里按同一条曲线折算，好让实盘那
- * 两三格（见各页的 steps）也成立。 */
+/* 阵底细进度条的填充比例：按当前所在格在序列里的序号等分。旧版进度条就是
+ * 搜索/详情 33% → 优选 66% → 就绪 100% 这种等分逻辑，这里推广到两三格：
+ * 两格（如「获取详情 → 就绪」）时首格正好落在 50%（正中），不再像老曲线那样
+ * 把首格卡在 10% 空着像坏了。 */
 const barPctAt = (idx: number, len: number) =>
-  len < 2 ? 100 : Math.round(10 + 90 * Math.pow(idx / (len - 1), 0.75));
+  len < 1 ? 100 : Math.round(((idx + 1) / len) * 100);
 
 const RuneRing = ({ lit, ember }: { lit: number; ember: boolean }) => (
   <div className='mtv-tal-runes'>
