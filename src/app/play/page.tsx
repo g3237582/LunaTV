@@ -4,7 +4,14 @@
 
 import { AlertCircle, ArrowLeft, Cloud, FileText, Heart, Keyboard, Link2, Loader2, Play, RefreshCw, Router, Search, Sparkles, Star, Users, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import { isAnimeCategoryText } from '@/lib/anime-keyword-expr';
 import { createAnime4KRenderer } from '@/lib/anime4k';
@@ -32,6 +39,11 @@ import {
   saveDanmakuSourceIndex,
   saveManualDanmakuSelection,
 } from '@/lib/danmaku/selection-memory';
+import { cleanEpisodeDisplayName } from '@/lib/danmaku/format';
+import {
+  getCachedDanmakuEpisodes,
+  setCachedDanmakuEpisodes,
+} from '@/lib/danmaku/episodes-cache';
 import type { DanmakuAnime, DanmakuComment, DanmakuSelection, DanmakuSettings } from '@/lib/danmaku/types';
 import {
   deleteFavorite,
@@ -281,6 +293,19 @@ function PlayPageClient() {
 
   // TMDB背景图
   const [tmdbBackdrop, setTmdbBackdrop] = useState<string | null>(null);
+  // TMDB 分集名称（按 episode_number-1 索引），复用背景请求解析出的 tmdbId 获取
+  const [tmdbEpisodeNames, setTmdbEpisodeNames] = useState<string[]>([]);
+  // 背景请求解析出的 tmdbId 字符串（形如 "tv:123"），供拉取分集名复用
+  const [resolvedTmdbIdStr, setResolvedTmdbIdStr] = useState<string | null>(
+    null
+  );
+  // 已发起 TMDB 分集名请求的 id，避免重复拉取
+  const tmdbEpisodesFetchedIdRef = useRef<string | null>(null);
+  // 「禁用集数标题获取并切换」开关（本地设置，进入播放页时读取一次）
+  const [episodeTitleFetchDisabled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('disableEpisodeTitleFetch') === 'true';
+  });
 
   // 收藏状态
   const [favorited, setFavorited] = useState(false);
@@ -649,6 +674,9 @@ function PlayPageClient() {
   const [danmakuEpisodesList, setDanmakuEpisodesList] = useState<
     Array<{ episodeId: number; episodeTitle: string }>
   >([]);
+  // 弹幕自动装填是否已「尘埃落定」（搜索完成/无源/已禁用）。
+  // 动漫优先用弹幕，需等它落定后再决定是否降级拉取 TMDB 分集名。
+  const [danmakuAutoLoadSettled, setDanmakuAutoLoadSettled] = useState(false);
   const [danmakuLoading, setDanmakuLoading] = useState(false);
   const [danmakuCount, setDanmakuCount] = useState(0);
   const [danmakuOriginalCount, setDanmakuOriginalCount] = useState(0);
@@ -1023,6 +1051,15 @@ function PlayPageClient() {
   // 弹幕自动加载逻辑的最新引用（由下方 effect 赋值，供播放器插件就绪后重入同一流程）
   const danmakuEpisodeLoaderRef = useRef<((episodeIndex: number) => Promise<'done' | 'retry'>) | null>(null);
 
+  // 统一写入弹幕完整分集列表：更新 state，并按视频标题做 LRU 缓存，供下次进入复用
+  const applyDanmakuEpisodes = useCallback(
+    (episodes: Array<{ episodeId: number; episodeTitle: string }>) => {
+      setDanmakuEpisodesList(episodes);
+      setCachedDanmakuEpisodes(videoTitleRef.current, episodes);
+    },
+    []
+  );
+
   // 自动加载指定集数弹幕的统一入口（剧集切换与播放器插件就绪共用，内部去重）
   // 返回 'done' 表示该集已处理（含已弹出选择弹窗）；'retry' 表示因弹幕插件未就绪等原因放弃，待插件就绪后可重新触发
   const loadDanmakuForEpisode = async (episodeIndex: number, retryCount = 0): Promise<'done' | 'retry'> => {
@@ -1033,6 +1070,8 @@ function PlayPageClient() {
       console.log('[弹幕] 已禁用自动加载弹幕，跳过自动加载');
       setShowDanmakuSourceSelector(false);
       setDanmakuLoading(false);
+      // 已禁用自动装填：弹幕不会自动到来，视为落定，允许动漫降级到 TMDB
+      setDanmakuAutoLoadSettled(true);
       return 'done';
     }
 
@@ -1070,6 +1109,8 @@ function PlayPageClient() {
     if (result === 'done') {
       // 标记该集已处理完毕
       lastLoadedEpisodeIndexForDanmakuRef.current = episodeIndex;
+      // 弹幕自动装填流程已完成（含无源/已弹出选择器），标记落定
+      setDanmakuAutoLoadSettled(true);
       return 'done';
     }
     // 'retry'：因弹幕插件未就绪而放弃；若此刻插件已就绪（本调用来自插件就绪回调等场景），重试一次
@@ -1278,7 +1319,7 @@ function PlayPageClient() {
                 episodeTitle: episode.episodeTitle,
               };
 
-              setDanmakuEpisodesList(episodesResult.bangumi.episodes);
+              applyDanmakuEpisodes(episodesResult.bangumi.episodes);
 
               // 通过统一的 handleDanmakuSelect 处理弹幕加载
               await handleDanmakuSelect(selection);
@@ -1343,7 +1384,7 @@ function PlayPageClient() {
                   };
 
                   // 设置剧集列表
-                  setDanmakuEpisodesList(episodesResult.bangumi.episodes);
+                  applyDanmakuEpisodes(episodesResult.bangumi.episodes);
 
                   console.log('使用记忆的弹幕源成功:', selection);
 
@@ -1396,7 +1437,7 @@ function PlayPageClient() {
               };
 
               // 设置剧集列表
-              setDanmakuEpisodesList(episodesResult.bangumi.episodes);
+              applyDanmakuEpisodes(episodesResult.bangumi.episodes);
 
               console.log('自动搜索弹幕成功:', selection);
 
@@ -1501,6 +1542,8 @@ function PlayPageClient() {
     const fetchTMDBBackdrop = async () => {
       if (isDirectPlay) {
         setTmdbBackdrop(null);
+        setTmdbEpisodeNames([]);
+        setResolvedTmdbIdStr(null);
         return;
       }
 
@@ -1515,6 +1558,8 @@ function PlayPageClient() {
 
       if (!videoTitle) {
         setTmdbBackdrop(null);
+        setTmdbEpisodeNames([]);
+        setResolvedTmdbIdStr(null);
         return;
       }
 
@@ -1524,6 +1569,8 @@ function PlayPageClient() {
 
         if (cachedId) {
           console.log('使用缓存的TMDB ID映射');
+          // 记录 tmdbId，交由懒加载按需拉取分集名称（弹幕优先，降级 TMDB）
+          setResolvedTmdbIdStr(cachedId);
 
           const detailsCacheKey = recommendationCacheKeys.tmdbDetails(cachedId);
           const detailsCache = getRecommendationCache<any>(detailsCacheKey);
@@ -1571,6 +1618,8 @@ function PlayPageClient() {
 
         // 保存title到tmdbId的映射到localStorage（1个月）
         if (result.tmdbId) {
+          // 记录 tmdbId，交由懒加载按需拉取分集名称
+          setResolvedTmdbIdStr(String(result.tmdbId));
           try {
             setRecommendationCache(mappingCacheKey, String(result.tmdbId));
 
@@ -1669,6 +1718,163 @@ function PlayPageClient() {
 
     fetchTMDBBackdrop();
   }, [videoTitle, videoDoubanId, isDirectPlay]);
+
+  // 复用背景请求解析出的 tmdbId，拉取该剧集当前季的分集名称（懒加载，按需触发）
+  const loadTmdbEpisodeNames = useCallback(
+    async (tmdbIdStr: string) => {
+      try {
+        if (!tmdbIdStr || tmdbEpisodesFetchedIdRef.current === tmdbIdStr) {
+          return;
+        }
+        const [mediaType, idPart] = tmdbIdStr.split(':');
+        const id = parseInt(idPart, 10);
+        if (mediaType !== 'tv' || !id) {
+          return;
+        }
+        // 标记已发起，避免重复拉取
+        tmdbEpisodesFetchedIdRef.current = tmdbIdStr;
+
+        // 从标题解析季度，缺省第 1 季
+        const seasonMatch =
+          videoTitle?.match(/第\s*(\d+)\s*[季部]/) ||
+          videoTitle?.match(/[Ss]eason\s*(\d+)/) ||
+          videoTitle?.match(/\bS(\d+)\b/);
+        const parsedSeason = seasonMatch ? parseInt(seasonMatch[1], 10) : NaN;
+        const seasonNumber =
+          Number.isNaN(parsedSeason) || parsedSeason < 1 ? 1 : parsedSeason;
+
+        const resp = await fetch(
+          `/api/tmdb/episodes?id=${id}&season=${seasonNumber}`
+        );
+        if (!resp.ok) return;
+        const season = await resp.json();
+        const eps = season?.episodes;
+        if (!Array.isArray(eps) || eps.length === 0) return;
+
+        const names: string[] = [];
+        eps.forEach((ep: any) => {
+          const num =
+            typeof ep?.episode_number === 'number' ? ep.episode_number : NaN;
+          if (!Number.isNaN(num) && num >= 1 && ep?.name) {
+            names[num - 1] = String(ep.name);
+          }
+        });
+        if (names.some((n) => n && n.trim() !== '')) {
+          setTmdbEpisodeNames(names);
+        }
+      } catch (err) {
+        console.error('获取TMDB分集名称失败:', err);
+      }
+    },
+    [videoTitle]
+  );
+
+  // 换剧时重置分集名相关状态
+  useEffect(() => {
+    tmdbEpisodesFetchedIdRef.current = null;
+    setTmdbEpisodeNames([]);
+    setDanmakuAutoLoadSettled(false);
+  }, [videoTitle]);
+
+  // 换剧时用弹幕完整分集列表缓存（LRU）预填 danmakuEpisodesList，
+  // 使命中缓存时无需重新搜索即可展示列表视图；无缓存则清空。
+  useEffect(() => {
+    if (episodeTitleFetchDisabled) {
+      setDanmakuEpisodesList([]);
+      return;
+    }
+    const cached = getCachedDanmakuEpisodes(videoTitle);
+    setDanmakuEpisodesList(cached ?? []);
+  }, [videoTitle, episodeTitleFetchDisabled]);
+
+  // 总集数
+  const totalEpisodes = detail?.episodes?.length || 0;
+
+  // 是否为动漫内容（决定分集名来源优先级：动漫弹幕优先，非动漫 TMDB 优先）
+  const isAnimeContent = useMemo(
+    () => isAnimeCategoryText(detail?.type_name, detail?.class),
+    [detail?.type_name, detail?.class]
+  );
+
+  // 分集标题里出现多个季度（SxxExx 中含 ≥2 个不同季号）时，弹幕（按番剧单季编号）无法跨季对齐、不可靠，
+  // 此时无论是否动漫都改用 TMDB。
+  const hasMultipleSeasons = useMemo(() => {
+    const titles = detail?.episodes_titles;
+    if (!titles || titles.length === 0) return false;
+    const seasons = new Set<number>();
+    for (const t of titles) {
+      const m = t?.match(/[Ss](\d+)[Ee]\d+/);
+      if (m) seasons.add(parseInt(m[1], 10));
+      if (seasons.size >= 2) return true;
+    }
+    return false;
+  }, [detail?.episodes_titles]);
+
+  // 分集名是否 TMDB 优先：非动漫，或虽是动漫但含多个季度（弹幕不可靠）
+  const preferTmdbNames = !isAnimeContent || hasMultipleSeasons;
+
+  // 弹幕分集名（按番号对齐视频集，需完整分集列表；由 LRU 缓存或主动搜索提供）。
+  // 去掉来源标记与集号后仍有实质内容才返回，否则返回 null（视为不可用）。
+  const danmakuRichNames = useMemo<(string | undefined)[] | null>(() => {
+    if (totalEpisodes <= 1) return null;
+    if (episodeTitleFetchDisabled) return null;
+    if (danmakuEpisodesList.length === 0) return null;
+
+    const extractEpNum = (title?: string): number | null => {
+      if (!title) return null;
+      const emby = title.match(/[Ss]\d+[Ee](\d+)/);
+      if (emby) return parseInt(emby[1], 10);
+      const zh = title.match(/^(\d+)$|第?\s*(\d+)\s*[集话話]?/);
+      return zh ? parseInt(zh[1] || zh[2], 10) : null;
+    };
+
+    // 番号 -> 弹幕标题，便于按集数对齐；无番号时回退索引对齐
+    const byNumber = new Map<number, string>();
+    danmakuEpisodesList.forEach((ep) => {
+      const num = extractEpNum(ep.episodeTitle);
+      if (num !== null && !byNumber.has(num)) {
+        byNumber.set(num, ep.episodeTitle);
+      }
+    });
+
+    const names: (string | undefined)[] = [];
+    for (let i = 0; i < totalEpisodes; i += 1) {
+      const videoNum = extractEpNum(detail?.episodes_titles?.[i]) ?? i + 1;
+      const matched = byNumber.get(videoNum);
+      const fallback = danmakuEpisodesList[i]?.episodeTitle;
+      const name = cleanEpisodeDisplayName(matched || fallback);
+      names[i] = name || undefined;
+    }
+    return names.some((n) => n) ? names : null;
+  }, [
+    totalEpisodes,
+    episodeTitleFetchDisabled,
+    danmakuEpisodesList,
+    detail?.episodes_titles,
+  ]);
+
+  // 拉取 TMDB 分集名。TMDB 优先（非动漫或多季度动漫）：解析出 tmdbId 后即请求；
+  // 弹幕优先（单季动漫）：先等弹幕自动装填「尘埃落定」，且仅在弹幕未产出可用标题时才降级拉 TMDB。
+  useEffect(() => {
+    if (isDirectPlay) return;
+    if (episodeTitleFetchDisabled) return;
+    if (!detail) return; // 等类型判定就绪，避免误判非动漫而抢先拉 TMDB
+    if (!resolvedTmdbIdStr) return;
+    if (!preferTmdbNames) {
+      if (danmakuRichNames) return; // 弹幕已够用，无需 TMDB
+      if (!danmakuAutoLoadSettled) return; // 弹幕优先：先等弹幕落定再决定是否降级
+    }
+    loadTmdbEpisodeNames(resolvedTmdbIdStr);
+  }, [
+    isDirectPlay,
+    episodeTitleFetchDisabled,
+    detail,
+    resolvedTmdbIdStr,
+    preferTmdbNames,
+    danmakuRichNames,
+    danmakuAutoLoadSettled,
+    loadTmdbEpisodeNames,
+  ]);
 
   useEffect(() => {
     if (
@@ -1902,8 +2108,29 @@ function PlayPageClient() {
     )
   );
 
-  // 总集数
-  const totalEpisodes = detail?.episodes?.length || 0;
+  // TMDB 分集名
+  const tmdbRichNames = useMemo<(string | undefined)[] | null>(() => {
+    if (totalEpisodes <= 1) return null;
+    if (episodeTitleFetchDisabled) return null;
+    if (!tmdbEpisodeNames.some((n) => n && n.trim() !== '')) return null;
+    return Array.from({ length: totalEpisodes }, (_, i) => {
+      const name = tmdbEpisodeNames[i];
+      return name && name.trim() !== '' ? name.trim() : undefined;
+    });
+  }, [totalEpisodes, episodeTitleFetchDisabled, tmdbEpisodeNames]);
+
+  // 选集列表的分集名称。优先级：
+  //   单季动漫：弹幕优先（可纠错性高、番剧标题更贴合），降级 TMDB
+  //   非动漫 / 多季度动漫：TMDB 优先，降级弹幕
+  const richEpisodeNames = useMemo<(string | undefined)[]>(() => {
+    const ordered = preferTmdbNames
+      ? [tmdbRichNames, danmakuRichNames]
+      : [danmakuRichNames, tmdbRichNames];
+    for (const names of ordered) {
+      if (names) return names;
+    }
+    return [];
+  }, [preferTmdbNames, danmakuRichNames, tmdbRichNames]);
   const directEpisodeLabel = detail?.episodes_titles?.[currentEpisodeIndex] || '直链';
   const shouldShowEpisodeLabel = totalEpisodes > 1 || isDirectPlay;
   const episodeLabel = isDirectPlay
@@ -6606,7 +6833,7 @@ function PlayPageClient() {
           };
 
           // 设置剧集列表
-          setDanmakuEpisodesList(episodesResult.bangumi.episodes);
+          applyDanmakuEpisodes(episodesResult.bangumi.episodes);
 
           console.log('用户选择弹幕源:', selection);
 
@@ -11239,6 +11466,7 @@ function PlayPageClient() {
               <EpisodeSelector
                 totalEpisodes={totalEpisodes}
                 episodes_titles={detail?.episodes_titles || []}
+                richEpisodeNames={richEpisodeNames}
                 value={currentEpisodeIndex + 1}
                 onChange={playSync.shouldDisableControls ? () => { /* disabled */ } : handleEpisodeChange}
                 onSourceChange={playSync.shouldDisableControls ? () => { /* disabled */ } : handleSourceChange}
@@ -11254,6 +11482,7 @@ function PlayPageClient() {
                 precomputedVideoInfo={precomputedVideoInfo}
                 useLightTextOnBackdrop={!!tmdbBackdrop}
                 onDanmakuSelect={(selection) => handleDanmakuSelect(selection, true)}
+                onDanmakuEpisodesLoaded={applyDanmakuEpisodes}
                 currentDanmakuSelection={currentDanmakuSelection}
                 onUploadDanmaku={handleUploadDanmaku}
                 episodeFilterConfig={episodeFilterConfig}

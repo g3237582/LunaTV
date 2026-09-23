@@ -215,6 +215,8 @@ export const UserMenu: React.FC = () => {
     useState(true);
   const [disablePlaybackThumbnail, setDisablePlaybackThumbnail] =
     useState(true);
+  const [disableEpisodeTitleFetch, setDisableEpisodeTitleFetch] =
+    useState(false);
   const [disableAutoLoadDanmaku, setDisableAutoLoadDanmaku] = useState(false);
   const [danmakuMaxCount, setDanmakuMaxCount] = useState(5000);
   const [danmakuHeatmapDisabled, setDanmakuHeatmapDisabled] = useState(false);
@@ -788,6 +790,13 @@ export const UserMenu: React.FC = () => {
       );
       if (savedDisablePlaybackThumbnail !== null) {
         setDisablePlaybackThumbnail(savedDisablePlaybackThumbnail === 'true');
+      }
+
+      const savedDisableEpisodeTitleFetch = localStorage.getItem(
+        'disableEpisodeTitleFetch'
+      );
+      if (savedDisableEpisodeTitleFetch !== null) {
+        setDisableEpisodeTitleFetch(savedDisableEpisodeTitleFetch === 'true');
       }
 
       const savedDisableAutoLoadDanmaku = localStorage.getItem(
@@ -2016,6 +2025,13 @@ export const UserMenu: React.FC = () => {
     }
   };
 
+  const handleDisableEpisodeTitleFetchToggle = (value: boolean) => {
+    setDisableEpisodeTitleFetch(value);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('disableEpisodeTitleFetch', String(value));
+    }
+  };
+
   const handleDisableAutoLoadDanmakuToggle = (value: boolean) => {
     setDisableAutoLoadDanmaku(value);
     if (typeof window !== 'undefined') {
@@ -2190,6 +2206,7 @@ export const UserMenu: React.FC = () => {
     setNextEpisodePreCache(true);
     setNextEpisodeDanmakuPreload(true);
     setDisablePlaybackThumbnail(true);
+    setDisableEpisodeTitleFetch(false);
     const defaultDanmakuAutoLoad =
       (typeof window !== 'undefined' &&
         (window as any).RUNTIME_CONFIG?.DANMAKU_AUTO_LOAD_DEFAULT !== false) ||
@@ -2228,6 +2245,7 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem('nextEpisodePreCache', 'true');
       localStorage.setItem('nextEpisodeDanmakuPreload', 'true');
       localStorage.setItem('disablePlaybackThumbnail', 'true');
+      localStorage.setItem('disableEpisodeTitleFetch', 'false');
       localStorage.setItem(
         'disableAutoLoadDanmaku',
         String(!defaultDanmakuAutoLoad)
@@ -2413,6 +2431,9 @@ export const UserMenu: React.FC = () => {
       case 'disablePlaybackThumbnail':
         setDisablePlaybackThumbnail(true);
         break;
+      case 'disableEpisodeTitleFetch':
+        setDisableEpisodeTitleFetch(false);
+        break;
       case 'disableAutoLoadDanmaku':
         setDisableAutoLoadDanmaku(
           (window as any).RUNTIME_CONFIG?.DANMAKU_AUTO_LOAD_DEFAULT === false
@@ -2546,6 +2567,9 @@ export const UserMenu: React.FC = () => {
           break;
         case 'disablePlaybackThumbnail':
           setDisablePlaybackThumbnail(value === 'true');
+          break;
+        case 'disableEpisodeTitleFetch':
+          setDisableEpisodeTitleFetch(value === 'true');
           break;
         case 'disableAutoLoadDanmaku':
           setDisableAutoLoadDanmaku(value === 'true');
@@ -4495,7 +4519,7 @@ export const UserMenu: React.FC = () => {
               )}
             </div>
 
-            {/* 缓冲设置 */}
+            {/* 播放设置 */}
             <div className='border border-gray-200 dark:border-gray-700 rounded-lg overflow-visible'>
               <button
                 onClick={() => setIsBufferSectionOpen(!isBufferSectionOpen)}
@@ -4504,7 +4528,7 @@ export const UserMenu: React.FC = () => {
                 <div className='flex items-center gap-2'>
                   <Gauge className='w-5 h-5 text-gray-600 dark:text-gray-400' />
                   <h3 className='text-base font-semibold text-gray-800 dark:text-gray-200'>
-                    缓冲设置
+                    播放设置
                   </h3>
                 </div>
                 {isBufferSectionOpen ? (
@@ -4517,7 +4541,7 @@ export const UserMenu: React.FC = () => {
                 <div className='p-3 md:p-4 space-y-4 md:space-y-6'>
                   <div>
                     <p className='text-xs text-gray-500 dark:text-gray-400'>
-                      调整播放器缓冲策略（仅在播放页面生效）
+                      调整播放器相关设置（仅在播放页面生效）
                     </p>
                   </div>
 
@@ -4653,6 +4677,34 @@ export const UserMenu: React.FC = () => {
                           checked={disablePlaybackThumbnail}
                           onChange={(e) =>
                             handleDisablePlaybackThumbnailToggle(
+                              e.target.checked
+                            )
+                          }
+                        />
+                        <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
+                        <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* 禁用集数标题获取并切换 */}
+                  <div className='flex items-center justify-between'>
+                    <div>
+                      <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                        禁用集数标题获取并切换
+                      </h4>
+                      <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                        开启后不再获取分集标题，选集面板保持数字网格视图，不自动切换为列表视图
+                      </p>
+                    </div>
+                    <label className='flex items-center cursor-pointer'>
+                      <div className='relative'>
+                        <input
+                          type='checkbox'
+                          className='sr-only peer'
+                          checked={disableEpisodeTitleFetch}
+                          onChange={(e) =>
+                            handleDisableEpisodeTitleFetchToggle(
                               e.target.checked
                             )
                           }

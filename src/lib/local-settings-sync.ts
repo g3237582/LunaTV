@@ -41,6 +41,7 @@ export const LOCAL_SETTINGS_KEYS: string[] = [
   'nextEpisodePreCache',
   'nextEpisodeDanmakuPreload',
   'disablePlaybackThumbnail',
+  'disableEpisodeTitleFetch',
   'disableAutoLoadDanmaku',
   'danmakuMaxCount',
   'danmaku_heatmap_disabled',
