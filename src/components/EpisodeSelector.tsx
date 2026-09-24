@@ -6,6 +6,7 @@ import {
   Link as LinkIcon,
   MoreVertical,
   Settings,
+  Wand2,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
@@ -27,6 +28,7 @@ import { getVideoResolutionFromM3u8 } from '@/lib/utils';
 
 import DanmakuPanel from '@/components/DanmakuPanel';
 import EpisodeFilterSettings from '@/components/EpisodeFilterSettings';
+import EpisodeTitleCorrectDialog from '@/components/EpisodeTitleCorrectDialog';
 import ProxyImage from '@/components/ProxyImage';
 import { useLongPress } from '@/hooks/useLongPress';
 
@@ -582,6 +584,9 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
   // 集数过滤设置弹窗状态
   const [showFilterSettings, setShowFilterSettings] = useState<boolean>(false);
 
+  // 手动矫正标题弹窗状态（矫正配置按 videoTitle 存 localStorage，由播放页消费）
+  const [showTitleCorrect, setShowTitleCorrect] = useState<boolean>(false);
+
   // 集数视图模式（列表/网格）与三点菜单
   const [episodeViewMode, setEpisodeViewMode] = useState<'grid' | 'list'>(
     'grid'
@@ -1010,10 +1015,15 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     [richEpisodeNames]
   );
 
-  // 有分集名时默认列表视图，无则网格；用户手动切换后不再自动跟随
+  // 无有效分集名（弹幕+TMDB 两路都失败）→ 无条件强制网格，避免残留列表视图用「第x集」兜底填满；
+  // 有分集名时才自动列表，且尊重用户手动切换
   useEffect(() => {
+    if (!hasRichEpisodeNames) {
+      setEpisodeViewMode('grid');
+      return;
+    }
     if (userSetViewModeRef.current) return;
-    setEpisodeViewMode(hasRichEpisodeNames ? 'list' : 'grid');
+    setEpisodeViewMode('list');
   }, [hasRichEpisodeNames]);
 
   // 点击菜单外部关闭三点菜单
@@ -1155,7 +1165,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                 />
               </svg>
             </button>
-            {/* 更多菜单（集数视图切换 / 集数屏蔽） */}
+            {/* 更多菜单（集数视图切换 / 集数屏蔽 / 手动矫正标题） */}
             <div
               className='relative flex-shrink-0 transform translate-y-[-4px]'
               ref={episodeMenuRef}
@@ -1204,6 +1214,17 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                   >
                     <Settings className='w-4 h-4' />
                     <span>集数屏蔽</span>
+                  </button>
+                  <button
+                    role='menuitem'
+                    className='w-full flex items-center gap-2 px-3 py-2 text-sm text-left text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors'
+                    onClick={() => {
+                      setShowTitleCorrect(true);
+                      setShowEpisodeMenu(false);
+                    }}
+                  >
+                    <Wand2 className='w-4 h-4' />
+                    <span>手动矫正标题</span>
                   </button>
                 </div>
               )}
@@ -1563,6 +1584,14 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
           onFilterConfigUpdate?.(config);
         }}
         onShowToast={onShowToast}
+      />
+
+      {/* 手动矫正标题弹窗 */}
+      <EpisodeTitleCorrectDialog
+        isOpen={showTitleCorrect}
+        onClose={() => setShowTitleCorrect(false)}
+        videoTitle={videoTitle || ''}
+        totalEpisodes={totalEpisodes}
       />
 
       {/* 原集名 popup：移动端长按 / 桌面右键，样式对齐标题上方 aka 提示 */}

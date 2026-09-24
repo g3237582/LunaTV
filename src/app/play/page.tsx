@@ -45,6 +45,11 @@ import {
   setCachedDanmakuEpisodes,
 } from '@/lib/danmaku/episodes-cache';
 import type { DanmakuAnime, DanmakuComment, DanmakuSelection, DanmakuSettings } from '@/lib/danmaku/types';
+import type { EpisodeTitleCorrection } from '@/lib/episode-title-correction';
+import {
+  EPISODE_TITLE_CORRECTION_EVENT,
+  getEpisodeTitleCorrection,
+} from '@/lib/episode-title-correction';
 import {
   deleteFavorite,
   deleteSkipConfig,
@@ -313,11 +318,15 @@ function PlayPageClient() {
   );
   // 已发起 TMDB 分集名请求的 id，避免重复拉取
   const tmdbEpisodesFetchedIdRef = useRef<string | null>(null);
-  // 「禁用集数标题获取并切换」开关（本地设置，进入播放页时读取一次）
-  const [episodeTitleFetchDisabled] = useState<boolean>(() => {
+  // 「禁用集数标题获取并切换」全局开关（本地设置，进入播放页时读取一次）
+  const [globalTitleFetchDisabled] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return localStorage.getItem('disableEpisodeTitleFetch') === 'true';
   });
+  // 「手动矫正标题」按剧集配置：随当前标题 / 用户矫正而更新
+  const [titleCorrection, setTitleCorrection] = useState<EpisodeTitleCorrection>(
+    {}
+  );
 
   // 收藏状态
   const [favorited, setFavorited] = useState(false);
@@ -922,6 +931,19 @@ function PlayPageClient() {
   const [initialEpisodeProgressYear] = useState(
     searchParams.get('year') || ''
   );
+
+  // 全局开关或「本剧集被禁用」任一命中即禁用集数标题获取；
+  // 矫正配置按标题（与传给 EpisodeSelector 的 videoTitle 一致）读取，随标题变化与矫正事件同步
+  const episodeTitleFetchDisabled =
+    globalTitleFetchDisabled || !!titleCorrection.disabled;
+  useEffect(() => {
+    const key = searchTitle || videoTitle;
+    const sync = () => setTitleCorrection(getEpisodeTitleCorrection(key));
+    sync();
+    window.addEventListener(EPISODE_TITLE_CORRECTION_EVENT, sync);
+    return () =>
+      window.removeEventListener(EPISODE_TITLE_CORRECTION_EVENT, sync);
+  }, [searchTitle, videoTitle]);
   const episodeProgressContentKey = useMemo(
     () =>
       buildEpisodeProgressContentKey({
@@ -1741,27 +1763,32 @@ function PlayPageClient() {
 
   // 复用背景请求解析出的 tmdbId，拉取该剧集当前季的分集名称（懒加载，按需触发）
   const loadTmdbEpisodeNames = useCallback(
-    async (tmdbIdStr: string) => {
+    async (tmdbIdStr: string, seasonOverride?: number) => {
       try {
-        if (!tmdbIdStr || tmdbEpisodesFetchedIdRef.current === tmdbIdStr) {
-          return;
-        }
         const [mediaType, idPart] = tmdbIdStr.split(':');
         const id = parseInt(idPart, 10);
         if (mediaType !== 'tv' || !id) {
           return;
         }
-        // 标记已发起，避免重复拉取
-        tmdbEpisodesFetchedIdRef.current = tmdbIdStr;
 
-        // 从标题解析季度，缺省第 1 季
-        const seasonMatch =
-          videoTitle?.match(/第\s*(\d+)\s*[季部]/) ||
-          videoTitle?.match(/[Ss]eason\s*(\d+)/) ||
-          videoTitle?.match(/\bS(\d+)\b/);
-        const parsedSeason = seasonMatch ? parseInt(seasonMatch[1], 10) : NaN;
-        const seasonNumber =
-          Number.isNaN(parsedSeason) || parsedSeason < 1 ? 1 : parsedSeason;
+        // 季度：优先手动指定，否则从标题解析，缺省第 1 季
+        let seasonNumber = seasonOverride;
+        if (!seasonNumber || seasonNumber < 1) {
+          const seasonMatch =
+            videoTitle?.match(/第\s*(\d+)\s*[季部]/) ||
+            videoTitle?.match(/[Ss]eason\s*(\d+)/) ||
+            videoTitle?.match(/\bS(\d+)\b/);
+          const parsedSeason = seasonMatch ? parseInt(seasonMatch[1], 10) : NaN;
+          seasonNumber =
+            Number.isNaN(parsedSeason) || parsedSeason < 1 ? 1 : parsedSeason;
+        }
+
+        // 指纹含 id + 季，避免重复拉取；手动改季时可重新拉取
+        const fingerprint = `${tmdbIdStr}#s${seasonNumber}`;
+        if (tmdbEpisodesFetchedIdRef.current === fingerprint) {
+          return;
+        }
+        tmdbEpisodesFetchedIdRef.current = fingerprint;
 
         const resp = await fetch(
           `/api/tmdb/episodes?id=${id}&season=${seasonNumber}`
@@ -1830,8 +1857,18 @@ function PlayPageClient() {
     return false;
   }, [detail?.episodes_titles]);
 
-  // 分集名是否 TMDB 优先：非动漫，或虽是动漫但含多个季度（弹幕不可靠）
-  const preferTmdbNames = !isAnimeContent || hasMultipleSeasons;
+  // 分集名是否 TMDB 优先：手动矫正优先（弹幕优先→false / 指定 TMDB→true），
+  // 否则默认按类型：非动漫，或虽是动漫但含多个季度（弹幕不可靠）
+  const preferTmdbNames = titleCorrection.preferDanmaku
+    ? false
+    : titleCorrection.tmdbId
+    ? true
+    : !isAnimeContent || hasMultipleSeasons;
+
+  // 手动指定的 TMDB 剧集串（覆盖自动解析）
+  const effectiveTmdbIdStr = titleCorrection.tmdbId
+    ? `tv:${titleCorrection.tmdbId}`
+    : resolvedTmdbIdStr;
 
   // 弹幕分集名（按番号对齐视频集，需完整分集列表；由 LRU 缓存或主动搜索提供）。
   // 去掉来源标记与集号后仍有实质内容才返回，否则返回 null（视为不可用）。
@@ -1875,21 +1912,25 @@ function PlayPageClient() {
 
   // 拉取 TMDB 分集名。TMDB 优先（非动漫或多季度动漫）：解析出 tmdbId 后即请求；
   // 弹幕优先（单季动漫）：先等弹幕自动装填「尘埃落定」，且仅在弹幕未产出可用标题时才降级拉 TMDB。
+  // 手动「弹幕优先」时完全不搜 TMDB；手动指定 TMDB 时用指定的 id/季。
   useEffect(() => {
     if (isDirectPlay) return;
     if (episodeTitleFetchDisabled) return;
+    if (titleCorrection.preferDanmaku) return; // 弹幕优先：不搜 TMDB
     if (!detail) return; // 等类型判定就绪，避免误判非动漫而抢先拉 TMDB
-    if (!resolvedTmdbIdStr) return;
+    if (!effectiveTmdbIdStr) return;
     if (!preferTmdbNames) {
       if (danmakuRichNames) return; // 弹幕已够用，无需 TMDB
       if (!danmakuAutoLoadSettled) return; // 弹幕优先：先等弹幕落定再决定是否降级
     }
-    loadTmdbEpisodeNames(resolvedTmdbIdStr);
+    loadTmdbEpisodeNames(effectiveTmdbIdStr, titleCorrection.season);
   }, [
     isDirectPlay,
     episodeTitleFetchDisabled,
+    titleCorrection.preferDanmaku,
+    titleCorrection.season,
     detail,
-    resolvedTmdbIdStr,
+    effectiveTmdbIdStr,
     preferTmdbNames,
     danmakuRichNames,
     danmakuAutoLoadSettled,
@@ -2128,16 +2169,25 @@ function PlayPageClient() {
     )
   );
 
-  // TMDB 分集名
+  // TMDB 分集名。TMDB(zh-CN)对无本地化标题的集数会返回「第 N 集」占位，
+  // 与弹幕一样用 cleanEpisodeDisplayName 去集号：整列去号后无实质内容视为无有效名字（null），
+  // 避免占位名把选集面板误切到列表视图。
+  // 起始集数（startEpisode）：视频第 1 集对应 TMDB 第 startEpisode 集，据此平移取名。
   const tmdbRichNames = useMemo<(string | undefined)[] | null>(() => {
     if (totalEpisodes <= 1) return null;
     if (episodeTitleFetchDisabled) return null;
-    if (!tmdbEpisodeNames.some((n) => n && n.trim() !== '')) return null;
-    return Array.from({ length: totalEpisodes }, (_, i) => {
-      const name = tmdbEpisodeNames[i];
-      return name && name.trim() !== '' ? name.trim() : undefined;
+    const offset = Math.max(1, titleCorrection.startEpisode ?? 1) - 1;
+    const names = Array.from({ length: totalEpisodes }, (_, i) => {
+      const cleaned = cleanEpisodeDisplayName(tmdbEpisodeNames[offset + i]);
+      return cleaned || undefined;
     });
-  }, [totalEpisodes, episodeTitleFetchDisabled, tmdbEpisodeNames]);
+    return names.some((n) => n) ? names : null;
+  }, [
+    totalEpisodes,
+    episodeTitleFetchDisabled,
+    tmdbEpisodeNames,
+    titleCorrection.startEpisode,
+  ]);
 
   // 选集列表的分集名称。优先级：
   //   单季动漫：弹幕优先（可纠错性高、番剧标题更贴合），降级 TMDB
