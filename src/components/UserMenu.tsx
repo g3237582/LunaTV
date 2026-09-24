@@ -171,6 +171,9 @@ export const UserMenu: React.FC = () => {
   const [doubanProxyUrl, setDoubanProxyUrl] = useState('');
   const [enableOptimization, setEnableOptimization] = useState(true);
   const [preferStrategy, setPreferStrategy] = useState<'fast' | 'full'>('fast');
+  const [preferMode, setPreferMode] = useState<
+    'balanced' | 'resolution' | 'speed'
+  >('balanced'); // 优选偏好：综合判定/分辨率优先/网速优先
   const [speedTestTimeout, setSpeedTestTimeout] = useState(4000); // 测速超时时间（毫秒）
   const [fluidSearch, setFluidSearch] = useState(true);
   const [tmdbBackdropDisabled, setTmdbBackdropDisabled] = useState(false);
@@ -738,6 +741,15 @@ export const UserMenu: React.FC = () => {
       const savedPreferStrategy = localStorage.getItem('preferStrategy');
       if (savedPreferStrategy === 'fast' || savedPreferStrategy === 'full') {
         setPreferStrategy(savedPreferStrategy);
+      }
+
+      const savedPreferMode = localStorage.getItem('preferMode');
+      if (
+        savedPreferMode === 'balanced' ||
+        savedPreferMode === 'resolution' ||
+        savedPreferMode === 'speed'
+      ) {
+        setPreferMode(savedPreferMode);
       }
 
       const savedSpeedTestTimeout = localStorage.getItem('speedTestTimeout');
@@ -1725,6 +1737,15 @@ export const UserMenu: React.FC = () => {
     }
   };
 
+  const handlePreferModeChange = (
+    value: 'balanced' | 'resolution' | 'speed'
+  ) => {
+    setPreferMode(value);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('preferMode', value);
+    }
+  };
+
   const handleSpeedTestTimeoutChange = (value: number) => {
     setSpeedTestTimeout(value);
     if (typeof window !== 'undefined') {
@@ -2186,6 +2207,7 @@ export const UserMenu: React.FC = () => {
     setSaveLivePlayRecords(false);
     setEnableOptimization(true);
     setPreferStrategy('fast');
+    setPreferMode('balanced');
     setFluidSearch(defaultFluidSearch);
     setTmdbBackdropDisabled(false);
     setEnableTrailers(false);
@@ -2224,6 +2246,7 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem(SAVE_LIVE_PLAY_RECORDS_KEY, 'false');
       localStorage.setItem('enableOptimization', JSON.stringify(true));
       localStorage.setItem('preferStrategy', 'fast');
+      localStorage.setItem('preferMode', 'balanced');
       localStorage.setItem('fluidSearch', JSON.stringify(defaultFluidSearch));
       localStorage.setItem('liveDirectConnect', JSON.stringify(false));
       localStorage.setItem('tmdb_backdrop_disabled', 'false');
@@ -2336,6 +2359,9 @@ export const UserMenu: React.FC = () => {
         break;
       case 'preferStrategy':
         setPreferStrategy('fast');
+        break;
+      case 'preferMode':
+        setPreferMode('balanced');
         break;
       case 'speedTestTimeout':
         setSpeedTestTimeout(4000);
@@ -2492,6 +2518,11 @@ export const UserMenu: React.FC = () => {
           break;
         case 'preferStrategy':
           setPreferStrategy(value === 'full' ? 'full' : 'fast');
+          break;
+        case 'preferMode':
+          setPreferMode(
+            value === 'resolution' || value === 'speed' ? value : 'balanced'
+          );
           break;
         case 'speedTestTimeout':
           setSpeedTestTimeout(Number(value) || 10);
@@ -3959,6 +3990,65 @@ export const UserMenu: React.FC = () => {
                               }`}
                             >
                               全量优选
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className='space-y-2'>
+                        <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3'>
+                          <span className='flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400'>
+                            优选偏好
+                            <button
+                              type='button'
+                              className='group relative inline-flex h-4 w-4 items-center justify-center rounded-full text-gray-400 transition-colors hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500/50 dark:text-gray-500 dark:hover:text-gray-300'
+                              aria-label='优选偏好说明'
+                            >
+                              <CircleHelp className='h-3.5 w-3.5' />
+                              <span className='pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-56 -translate-x-1/2 rounded-lg bg-gray-900 px-3 py-2 text-left text-xs leading-relaxed text-white shadow-lg group-hover:block group-focus:block dark:bg-gray-700'>
+                                综合判定：分辨率与网速均衡评分
+                                <br />
+                                分辨率优先：优选时给分辨率加权重
+                                <br />
+                                网速优先：优选时给网速加权重
+                              </span>
+                            </button>
+                          </span>
+                          <div className='flex w-full rounded-lg border border-gray-200 bg-gray-100 p-1 dark:border-gray-700 dark:bg-gray-800 sm:inline-flex sm:w-auto'>
+                            <button
+                              type='button'
+                              onClick={() => handlePreferModeChange('balanced')}
+                              className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-all sm:flex-none ${
+                                preferMode === 'balanced'
+                                  ? 'bg-white text-green-600 shadow-sm dark:bg-gray-700 dark:text-green-400'
+                                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                              }`}
+                            >
+                              综合判定
+                            </button>
+                            <button
+                              type='button'
+                              onClick={() =>
+                                handlePreferModeChange('resolution')
+                              }
+                              className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-all sm:flex-none ${
+                                preferMode === 'resolution'
+                                  ? 'bg-white text-green-600 shadow-sm dark:bg-gray-700 dark:text-green-400'
+                                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                              }`}
+                            >
+                              分辨率优先
+                            </button>
+                            <button
+                              type='button'
+                              onClick={() => handlePreferModeChange('speed')}
+                              className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-all sm:flex-none ${
+                                preferMode === 'speed'
+                                  ? 'bg-white text-green-600 shadow-sm dark:bg-gray-700 dark:text-green-400'
+                                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                              }`}
+                            >
+                              网速优先
                             </button>
                           </div>
                         </div>

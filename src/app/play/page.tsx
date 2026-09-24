@@ -2397,6 +2397,17 @@ function PlayPageClient() {
     return 'fast';
   });
 
+  // 优选偏好：综合判定(balanced) / 分辨率优先(resolution) / 网速优先(speed)
+  const [preferMode] = useState<'balanced' | 'resolution' | 'speed'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('preferMode');
+      if (saved === 'balanced' || saved === 'resolution' || saved === 'speed') {
+        return saved;
+      }
+    }
+    return 'balanced';
+  });
+
   // 保存优选时的测速结果，避免EpisodeSelector重复测速
   const [precomputedVideoInfo, setPrecomputedVideoInfo] = useState<
     Map<string, { quality: string; loadSpeed: string; pingTime: number; bitrate: string }>
@@ -3436,7 +3447,20 @@ function PlayPageClient() {
   ): number => {
     let score = 0;
 
-    // 分辨率评分 (40% 权重)
+    // 根据优选偏好确定各维度权重（三项相加恒为 1，保证基础分维持 0-100 量级，
+    // 权重加分的相对影响在不同偏好下保持一致）
+    const dimensionWeights = (() => {
+      switch (preferMode) {
+        case 'resolution': // 分辨率优先
+          return { quality: 0.6, speed: 0.25, ping: 0.15 };
+        case 'speed': // 网速优先（下载速度 + 延迟）
+          return { quality: 0.15, speed: 0.55, ping: 0.3 };
+        default: // balanced 综合判定（当前模式）
+          return { quality: 0.4, speed: 0.4, ping: 0.2 };
+      }
+    })();
+
+    // 分辨率评分
     const qualityScore = (() => {
       switch (testResult.quality) {
         case '4K':
@@ -3455,9 +3479,9 @@ function PlayPageClient() {
           return 0;
       }
     })();
-    score += qualityScore * 0.4;
+    score += qualityScore * dimensionWeights.quality;
 
-    // 下载速度评分 (40% 权重) - 基于最大速度线性映射
+    // 下载速度评分 - 基于最大速度线性映射
     const speedScore = (() => {
       const speedStr = testResult.loadSpeed;
       if (speedStr === '未知' || speedStr === '测量中...') return 30;
@@ -3474,9 +3498,9 @@ function PlayPageClient() {
       const speedRatio = speedKBps / maxSpeed;
       return Math.min(100, Math.max(0, speedRatio * 100));
     })();
-    score += speedScore * 0.4;
+    score += speedScore * dimensionWeights.speed;
 
-    // 网络延迟评分 (20% 权重) - 基于延迟范围线性映射
+    // 网络延迟评分 - 基于延迟范围线性映射
     const pingScore = (() => {
       const ping = testResult.pingTime;
       if (ping <= 0) return 0; // 无效延迟给默认分
@@ -3488,7 +3512,7 @@ function PlayPageClient() {
       const pingRatio = (maxPing - ping) / (maxPing - minPing);
       return Math.min(100, Math.max(0, pingRatio * 100));
     })();
-    score += pingScore * 0.2;
+    score += pingScore * dimensionWeights.ping;
 
     // 权重加分 - 直接加到总分上（0-100分）
     score += weight;

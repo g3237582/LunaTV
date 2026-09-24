@@ -15,6 +15,7 @@ export const LOCAL_SETTINGS_KEYS: string[] = [
   'saveLivePlayRecords',
   'enableOptimization',
   'preferStrategy',
+  'preferMode',
   'speedTestTimeout',
   'maxConcurrentDownloads',
   'downloadThreadsPerTask',
