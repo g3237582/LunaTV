@@ -40,7 +40,7 @@ export interface AdminConfig {
     BangumiProxy?: string;
     LiveChartProxy?: string;
     BannerDataSource?: string; // 轮播图数据源：TMDB、TX 或 Douban
-    RecommendationDataSource?: string; // 更多推荐数据源：Douban、TMDB、Mixed、MixedSmart
+    RecommendationDataSource?: string; // 更多推荐数据源：Douban、TMDB、Mixed
     // 本地设置云同步模式：off=关闭，manual=手动（面板右上角备份/恢复按钮），auto=自动（进入网站静默拉取、面板打开静默同步）
     LocalSettingsSyncMode?: 'off' | 'manual' | 'auto';
     // Pansou配置

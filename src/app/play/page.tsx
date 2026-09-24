@@ -1162,7 +1162,15 @@ function PlayPageClient() {
       // 立即清空当前弹幕（使用 reset 方法，不触发显示/隐藏事件）
       if (danmakuPluginRef.current) {
         danmakuPluginRef.current.reset();
+        // reset() 不会清空 option.danmuku，这里显式清空，
+        // 避免换集后下一集无弹幕/加载失败时热力图残留上一集数据
+        danmakuPluginRef.current.config({ danmuku: [] });
+        danmakuPluginRef.current.load();
         setDanmakuCount(0);
+        // 通知热力图立即擦除上一集曲线
+        if (artPlayerRef.current) {
+          artPlayerRef.current.emit('danmaku:loaded');
+        }
       }
 
       // 先尝试从 IndexedDB 缓存加载
@@ -6439,6 +6447,11 @@ function PlayPageClient() {
       danmakuPluginRef.current.load();
       setDanmakuCount(0);
 
+      // 通知热力图：弹幕已清空，立即擦除上一集曲线（避免换集后残留）
+      if (artPlayerRef.current) {
+        artPlayerRef.current.emit('danmaku:loaded');
+      }
+
       // 获取弹幕数据（使用 title + episodeIndex 缓存；episodeIndex 经 ref 读取，避免闭包过期）
       const title = videoTitleRef.current;
       const episodeIndex = currentEpisodeIndexRef.current;
@@ -6525,6 +6538,11 @@ function PlayPageClient() {
         synchronousPlayback: currentSettings.synchronousPlayback,
       });
       danmakuPluginRef.current.load();
+
+      // 通知热力图更新（首次播放/换集后绘制新曲线）
+      if (artPlayerRef.current) {
+        artPlayerRef.current.emit('danmaku:loaded');
+      }
 
       // 根据保存的显示状态来决定显示或隐藏弹幕
       const savedDisplayState = loadDanmakuDisplayState();
@@ -9318,10 +9336,6 @@ function PlayPageClient() {
                   return;
                 }
 
-                if (heatmapData.length === 0) {
-                  return;
-                }
-
                 const ctx = canvas.getContext('2d');
                 if (!ctx) {
                   return;
@@ -9330,12 +9344,19 @@ function PlayPageClient() {
                 const dpr = window.devicePixelRatio || 1;
                 const width = canvas.width / dpr;
                 const height = canvas.height / dpr;
-                const duration = artPlayerRef.current.duration || 0;
-                const currentTime = artPlayerRef.current.currentTime || 0;
 
                 ctx.save();
                 ctx.scale(dpr, dpr);
                 ctx.clearRect(0, 0, width, height);
+
+                // 没有弹幕数据时，清空画布后直接返回，避免残留上一集的热力曲线
+                if (heatmapData.length === 0) {
+                  ctx.restore();
+                  return;
+                }
+
+                const duration = artPlayerRef.current.duration || 0;
+                const currentTime = artPlayerRef.current.currentTime || 0;
 
                 const progressRatio = duration > 0 ? currentTime / duration : 0;
                 const progressX = progressRatio * width;
@@ -9513,11 +9534,14 @@ function PlayPageClient() {
 
                 if (danmakuList.length > 0 && duration > 0) {
                   heatmapData = calculateHeatmapData(danmakuList, duration);
-                  // 立即绘制热力图
-                  drawHeatmap();
-                  // 强制再次绘制，确保显示
-                  setTimeout(drawHeatmap, 100);
+                } else {
+                  // 无弹幕（换集后下一集无弹幕/加载失败）时清空热力图数据，避免残留上一集曲线
+                  heatmapData = [];
                 }
+                // 立即绘制热力图（无数据时会清空画布）
+                drawHeatmap();
+                // 强制再次绘制，确保显示
+                setTimeout(drawHeatmap, 100);
               };
 
               artPlayerRef.current.on('video:loadedmetadata', updateHeatmapData);
@@ -9543,8 +9567,13 @@ function PlayPageClient() {
               const pollInterval = 500; // 每 500ms 检查一次
 
               const pollForDanmakuPlugin = () => {
-                if (danmakuPluginRef.current && danmakuPluginRef.current.option?.danmuku) {
-                  // 弹幕插件已准备好且有数据
+                const pluginDanmuku = danmakuPluginRef.current?.option?.danmuku;
+                if (
+                  danmakuPluginRef.current &&
+                  Array.isArray(pluginDanmuku) &&
+                  pluginDanmuku.length > 0
+                ) {
+                  // 弹幕插件已准备好且有真实数据
                   updateHeatmapData();
                   return; // 成功，停止轮询
                 }
