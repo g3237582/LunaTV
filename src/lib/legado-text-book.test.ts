@@ -58,7 +58,7 @@ function zipFromBytes(name: string, payload: Buffer, deflate = false): Uint8Arra
 
 function crc32(buf: Buffer): number {
   let crc = 0xffffffff;
-  for (const byte of buf) {
+  for (const byte of Array.from(buf)) {
     crc ^= byte;
     for (let i = 0; i < 8; i += 1) {
       crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);

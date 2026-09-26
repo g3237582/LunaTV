@@ -34,12 +34,12 @@ function legadoSource(): BookSource {
 describe('bookSourceKind', () => {
   it('treats OPDS/EPUB sources as file-based, not Legado', () => {
     expect(bookSourceKind(opdsSource())).toBe('opds');
-    expect(bookSourceKind({ type: 'opds', url: 'https://opds.example', id: 'x', name: 'x' })).toBe('opds');
+    expect(bookSourceKind({ type: 'opds' })).toBe('opds');
   });
 
   it('treats explicit Legado sources as chapter-capable', () => {
     expect(bookSourceKind(legadoSource())).toBe('legado');
-    expect(bookSourceKind({ id: 'x', name: 'x', url: 'https://x', legado: {} })).toBe('legado');
+    expect(bookSourceKind({ legado: {} })).toBe('legado');
   });
 });
 
