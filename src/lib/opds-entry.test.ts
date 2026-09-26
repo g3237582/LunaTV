@@ -61,7 +61,6 @@ describe('resolveOpdsAuthor', () => {
   it('uses a short Gutenberg content field as the author when atom:author is missing', () => {
     expect(
       resolveOpdsAuthor({
-        title: 'Pride and Prejudice',
         content: 'Jane Austen',
       })
     ).toBe('Jane Austen');
