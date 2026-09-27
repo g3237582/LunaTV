@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { isMusicSource, lxGetJson, LxServerSong, normalizeLxSong } from '@/lib/music-v2';
 import { badRequest, internalError } from '@/lib/music-v2-api';
+import { musicSearchHasMore } from '@/lib/search-list-paging';
 
 export const runtime = 'nodejs';
 
@@ -31,7 +32,7 @@ export async function GET(request: NextRequest) {
           type,
           page,
           limit,
-          hasMore: Array.isArray(list) && list.length >= limit,
+          hasMore: musicSearchHasMore(list, limit, type),
         },
       },
       {
