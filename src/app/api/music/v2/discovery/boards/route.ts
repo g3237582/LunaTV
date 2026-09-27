@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { mapLxBoards } from '@/lib/music-board-cover';
 import {
   createTtlCache,
   firstAvailableSourceList,
@@ -31,20 +32,21 @@ export async function GET(request: NextRequest) {
     }
 
     const fallbackSources = [source, 'kg', 'kw', 'tx', 'wy', 'mg'];
-    const result = await firstAvailableSourceList<{ id?: string; bangid?: string; name: string; img?: string }>({
+    const result = await firstAvailableSourceList<Record<string, unknown>>({
       sources: fallbackSources,
       load: (candidate) =>
-        lxGetJson(`/api/music/leaderboard/boards?source=${candidate}`, 'none', MUSIC_DISCOVERY_TIMEOUT_MS),
+        lxGetJson(
+          `/api/music/leaderboard/boards?source=${candidate}`,
+          'none',
+          MUSIC_DISCOVERY_TIMEOUT_MS
+        ),
       unwrap: unwrapLxArray,
     });
 
     const payload: BoardsPayload = {
-      list: result.list.map((item) => ({
-        id: item.bangid || item.id || '',
-        name: item.name,
-        cover: item.img,
-        source: result.source,
-      })),
+      // 榜单列表本身通常没有图。这里只透传上游若已带的 img/pic/coverImgUrl，
+      // 缺图的封面由 board-covers 用榜内第一首歌的专辑图补，避免这个接口变慢。
+      list: mapLxBoards(result.list, result.source),
       source: result.source,
       errors: result.errors,
     };

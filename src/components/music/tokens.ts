@@ -290,12 +290,11 @@ export const MUSIC_SLEEVE_DISC_LABEL =
 /**
  * 套面。
  *
- * **热榜卡按定义就没有封面**——上游 /leaderboard/boards 回的每一项只有
- * id/name/bangid，五个音源 171 个榜单一个 img 都没有，不是"这次没有图"，是它
- * 永远不会有。所以别把套面当成"一个等着换图的框"：它是一张本来就没印画的套子，
- * 卡面就是版面本身（见 MUSIC_FACE_CAT 那段）。
+ * 上游 /leaderboard/boards 不带图。有封面时（榜单 pic，或榜内第一首歌的专辑图）
+ * 铺在这层里，`overflow-hidden` 把图裁成正方形；没有图或图挂了，卡面仍是目录号
+ * 版式（见 MUSIC_FACE_CAT），不要换成歌单卡那种破图记号。
  *
- * 底色用 music-art 而不是 music-card-2：卡纸得比套子本身深一档，上面印的字才
+ * 底色用 music-art 而不是 music-card-2：没图时卡纸得比套子本身深一档，上面印的字才
  * 站得住。不能再浅下去。
  */
 export const MUSIC_FACE = cn(
