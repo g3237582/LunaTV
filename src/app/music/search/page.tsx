@@ -5,7 +5,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 
 import MusicPaginationBar from '@/components/music/MusicPaginationBar';
-import { MUSIC_LIST_PAGE_SIZE, parsePageParam, sliceMusicPage, withPageQuery } from '@/lib/music-page-data';
+import { parsePageParam, sliceMusicPage, withPageQuery } from '@/lib/music-page-data';
+import { musicSearchPageLimit, songSearchStartIndex } from '@/lib/search-list-paging';
 
 import CoverCard from '@/components/music/CoverCard';
 import MusicEmpty, {
@@ -266,7 +267,7 @@ export default function MusicSearchPage() {
 
     try {
       const res = await fetch(
-        `/api/music/v2/search?source=${source}&q=${encodeURIComponent(q)}&type=${searchType}&page=${pageNum}&limit=${MUSIC_LIST_PAGE_SIZE}`,
+        `/api/music/v2/search?source=${source}&q=${encodeURIComponent(q)}&type=${searchType}&page=${pageNum}&limit=${musicSearchPageLimit(searchType)}`,
         { signal }
       );
       const data = await res.json();
@@ -494,7 +495,7 @@ export default function MusicSearchPage() {
             <AlbumGrid albums={albums} onOpen={openAlbum} />
           )
         ) : songs.length > 0 ? (
-          <SongList songs={songs} startIndex={(page - 1) * MUSIC_LIST_PAGE_SIZE} />
+          <SongList songs={songs} startIndex={songSearchStartIndex(page)} />
         ) : (
           <MusicEmpty title={`没有搜到「${q}」`} hint='换个写法，或者切一个音源再试。' />
         )

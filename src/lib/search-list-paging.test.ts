@@ -1,9 +1,12 @@
 import {
   clampSearchPage,
+  musicSearchPageLimit,
   SEARCH_LIST_PAGE_SIZE,
   searchListPageCount,
   searchListPageOf,
   searchListSummaryText,
+  SONG_SEARCH_PAGE_SIZE,
+  songSearchStartIndex,
 } from '@/lib/search-list-paging';
 
 describe('searchListPageCount', () => {
@@ -41,6 +44,21 @@ describe('searchListPageOf', () => {
 describe('clampSearchPage', () => {
   it('stays on page 1 when there are no pages', () => {
     expect(clampSearchPage(4, 0)).toBe(1);
+  });
+});
+
+describe('song search paging', () => {
+  it('numbers page 2 from 21 because each upstream page has 20 songs', () => {
+    expect(SONG_SEARCH_PAGE_SIZE).toBe(20);
+    expect(songSearchStartIndex(1)).toBe(0);
+    expect(songSearchStartIndex(2)).toBe(20);
+    expect(songSearchStartIndex(3)).toBe(40);
+  });
+
+  it('requests 20 songs per page and leaves singer/album limits unchanged', () => {
+    expect(musicSearchPageLimit('song')).toBe(SONG_SEARCH_PAGE_SIZE);
+    expect(musicSearchPageLimit('singer')).toBe(SEARCH_LIST_PAGE_SIZE);
+    expect(musicSearchPageLimit('album')).toBe(SEARCH_LIST_PAGE_SIZE);
   });
 });
 
