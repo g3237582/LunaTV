@@ -24,6 +24,11 @@ import {
   resolveAnime4KOutputScale,
   type Anime4KUserScale,
 } from '@/lib/anime4k-policy';
+import {
+  isPlaybackOnSelectedEpisode,
+  resolveEpisodeResumeAction,
+  resolveSkipBoundaries,
+} from '@/lib/episode-resume';
 import { createFSRRenderer } from '@/lib/fsr';
 import { filterAdsFromM3U8Default } from '@/lib/hls-ad-filter';
 import {
@@ -39,10 +44,7 @@ import {
   resolveSafeResumeTime,
   writeFailedHlsPlayhead,
 } from '@/lib/hls-recover';
-import {
-  resolveHlsStartPosition,
-  resolvePreferredResumeTime,
-} from '@/lib/hls-start-position';
+import { resolveHlsStartPosition } from '@/lib/hls-start-position';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import {
   clearDanmakuCacheByTitle,
@@ -1077,6 +1079,7 @@ function PlayPageClient() {
       console.log('[PlayPage] Checking episode from URL:', { urlEpisode: episode, currentIndex: currentEpisodeIndex, newIndex });
       if (newIndex !== currentEpisodeIndex) {
         console.log('[PlayPage] URL episode changed, updating index to:', newIndex);
+        primeEpisodeResumeState(newIndex);
         setCurrentEpisodeIndex(newIndex);
       }
     }
@@ -2424,9 +2427,16 @@ function PlayPageClient() {
 
   // 用于记录是否需要在播放器 ready 后跳转到指定进度
   const resumeTimeRef = useRef<number | null>(null);
-  // HLS recover / remount 后仍要用的播放头，不能关在 customType 闭包里
+  // HLS recover / remount 后仍要用的播放头，不能关在 customType 闭包里。
+  // 播放头必须带集数：切集后旧集的时间不能再被当成新集的续播位置。
   const hlsPlayheadRef = useRef(0);
+  const hlsPlayheadEpisodeRef = useRef<number | null>(null);
   const hlsFailedPlayheadRef = useRef(0);
+  const hlsFailedPlayheadEpisodeRef = useRef<number | null>(null);
+  // 播放器实际在播的集。和当前选集不一致时不能把进度写进新集。
+  const playbackEpisodeRef = useRef<number | null>(null);
+  const handleNextEpisodeRef = useRef<(() => void) | null>(null);
+  const handlePreviousEpisodeRef = useRef<(() => void) | null>(null);
   const hlsDecodeSkipAtRef = useRef(0);
   const hlsRecoverStateRef = useRef(createHlsRecoverState());
   // 切换鸿蒙 HLS 内核时，同时恢复切换前的播放/暂停状态。
@@ -4306,11 +4316,39 @@ function PlayPageClient() {
     }
 
     const requestKey = `${detailData.source}|${detailData.id}|${episodeIndex}`;
-    const isEpisodeSwitchRequest = lastVideoRequestKeyRef.current !== requestKey;
+    const previousRequestKey = lastVideoRequestKeyRef.current ?? '';
+    const isEpisodeSwitchRequest = previousRequestKey !== requestKey;
+    const previousEpisode = previousRequestKey.split('|').pop() ?? '';
+    const episodeChanged =
+      previousRequestKey.length > 0 && previousEpisode !== String(episodeIndex);
     lastVideoRequestKeyRef.current = requestKey;
     const requestSeq = ++videoUrlRequestSeqRef.current;
     videoMediaTypeRef.current = '';
     mediaCorsFallbackRef.current = false;
+
+    // 换集时先拆掉上一集的媒体时钟和 HLS 播放头。
+    // 否则新集的 startLoad / canplay 会从上一集结尾继续，自动下一集刚开头就结束。
+    if (episodeChanged) {
+      hlsPlayheadRef.current = 0;
+      hlsPlayheadEpisodeRef.current = null;
+      hlsRecoverStateRef.current = createHlsRecoverState();
+      playbackEpisodeRef.current = null;
+      lastSavedPlayTimeRef.current = null;
+      if (artPlayerRef.current?.video) {
+        try {
+          const video = artPlayerRef.current.video as HTMLVideoElement & {
+            hls?: { destroy?: () => void };
+          };
+          video.pause();
+          video.hls?.destroy?.();
+          delete video.hls;
+          video.removeAttribute('src');
+          video.load();
+        } catch (error) {
+          console.warn('切集时清空上一集播放头失败:', error);
+        }
+      }
+    }
 
     let newUrl = detailData?.episodes[episodeIndex] || '';
     let nextPlaybackSourceBadge: PlaybackSourceBadge = null;
@@ -6035,6 +6073,7 @@ function PlayPageClient() {
           hlsFailedPlayheadRef.current,
           readFailedHlsPlayhead(spliceKey)
         );
+        hlsFailedPlayheadEpisodeRef.current = initialIndex;
         resumeTimeRef.current = resolveSafeResumeTime(
           resumeTimeRef.current,
           hlsFailedPlayheadRef.current
@@ -6110,11 +6149,37 @@ function PlayPageClient() {
         if (targetEpisode >= 0 && targetEpisode < targetSource.episodes.length) {
           setCurrentEpisodeIndex(targetEpisode);
 
-          // 如果是同一集,保存播放进度以便恢复
+          // 同一集跟随源切换时保留当前进度；换集则只使用目标集自己的进度。
           if (targetEpisode === currentEpisodeIndex && currentPlayTime > 1) {
             resumeTimeRef.current = currentPlayTime;
+            hlsPlayheadRef.current = currentPlayTime;
+            hlsPlayheadEpisodeRef.current = targetEpisode;
           } else {
-            resumeTimeRef.current = null;
+            hlsPlayheadRef.current = 0;
+            hlsPlayheadEpisodeRef.current = null;
+            playbackEpisodeRef.current = null;
+            lastSavedPlayTimeRef.current = null;
+            const failedPlayhead = readFailedHlsPlayhead(
+              hlsBadSpliceStorageKey(urlSource, urlId, targetEpisode)
+            );
+            hlsFailedPlayheadRef.current = failedPlayhead;
+            hlsFailedPlayheadEpisodeRef.current =
+              failedPlayhead >= 1 ? targetEpisode : null;
+            const episodeResume = resolveEpisodeResumeAction({
+              targetEpisode,
+              episodeProgress: loadLocalEpisodeProgress(
+                episodeProgressContentKey,
+                targetEpisode
+              ),
+              livePlayhead: 0,
+              livePlayheadEpisode: null,
+              failedPlayhead,
+              failedPlayheadEpisode:
+                failedPlayhead >= 1 ? targetEpisode : null,
+              currentTime: 0,
+            });
+            resumeTimeRef.current =
+              episodeResume.action === 'seek' ? episodeResume.time : null;
           }
         }
       } else {
@@ -6295,7 +6360,35 @@ function PlayPageClient() {
             newEpisodeProgressContentKey,
             targetIndex
           );
-      resumeTimeRef.current = resumeTime;
+      if (isSameEpisodeSwitch) {
+        hlsPlayheadEpisodeRef.current = targetIndex;
+        if (Number(resumeTime) > 1) {
+          hlsPlayheadRef.current = Number(resumeTime);
+        }
+      } else {
+        hlsPlayheadRef.current = 0;
+        hlsPlayheadEpisodeRef.current = null;
+        hlsRecoverStateRef.current = createHlsRecoverState();
+        playbackEpisodeRef.current = null;
+        lastSavedPlayTimeRef.current = null;
+        const failedPlayhead = readFailedHlsPlayhead(
+          hlsBadSpliceStorageKey(newSource, newId, targetIndex)
+        );
+        hlsFailedPlayheadRef.current = failedPlayhead;
+        hlsFailedPlayheadEpisodeRef.current =
+          failedPlayhead >= 1 ? targetIndex : null;
+      }
+      const sourceSwitchResume = resolveEpisodeResumeAction({
+        targetEpisode: targetIndex,
+        episodeProgress: resumeTime,
+        livePlayhead: hlsPlayheadRef.current,
+        livePlayheadEpisode: hlsPlayheadEpisodeRef.current,
+        failedPlayhead: hlsFailedPlayheadRef.current,
+        failedPlayheadEpisode: hlsFailedPlayheadEpisodeRef.current,
+        currentTime: 0,
+      });
+      resumeTimeRef.current =
+        sourceSwitchResume.action === 'seek' ? sourceSwitchResume.time : null;
 
       // 更新URL参数（不刷新页面）
       const newUrl = new URL(window.location.href);
@@ -6421,17 +6514,46 @@ function PlayPageClient() {
   };
 
   const primeEpisodeResumeState = (targetEpisodeIndex: number) => {
-    if (!currentSourceRef.current || !currentIdRef.current) {
+    // 切集路径只读取本地单集进度，避免阻塞式读取全局播放记录/远端数据库。
+    // 首次进入页面的全局播放记录恢复逻辑保持不变。
+    // 同时丢掉上一集的会话播放头，避免 canplay 把它套到新集上。
+    hlsPlayheadRef.current = 0;
+    hlsPlayheadEpisodeRef.current = null;
+    hlsRecoverStateRef.current = createHlsRecoverState();
+    lastSavedPlayTimeRef.current = null;
+    playbackEpisodeRef.current = null;
+
+    const source = currentSourceRef.current;
+    const id = currentIdRef.current;
+    const failedPlayhead =
+      source && id
+        ? readFailedHlsPlayhead(
+            hlsBadSpliceStorageKey(source, id, targetEpisodeIndex)
+          )
+        : 0;
+    hlsFailedPlayheadRef.current = failedPlayhead;
+    hlsFailedPlayheadEpisodeRef.current =
+      failedPlayhead >= 1 ? targetEpisodeIndex : null;
+
+    if (!source || !id) {
       resumeTimeRef.current = null;
       return;
     }
 
-    // 切集路径只读取本地单集进度，避免阻塞式读取全局播放记录/远端数据库。
-    // 首次进入页面的全局播放记录恢复逻辑保持不变。
-    resumeTimeRef.current = loadLocalEpisodeProgress(
-      episodeProgressContentKey,
-      targetEpisodeIndex
-    );
+    const episodeResume = resolveEpisodeResumeAction({
+      targetEpisode: targetEpisodeIndex,
+      episodeProgress: loadLocalEpisodeProgress(
+        episodeProgressContentKey,
+        targetEpisodeIndex
+      ),
+      livePlayhead: 0,
+      livePlayheadEpisode: null,
+      failedPlayhead,
+      failedPlayheadEpisode: failedPlayhead >= 1 ? targetEpisodeIndex : null,
+      currentTime: 0,
+    });
+    resumeTimeRef.current =
+      episodeResume.action === 'seek' ? episodeResume.time : null;
   };
 
   const prepareEpisodeSwitch = () => {
@@ -6510,6 +6632,13 @@ function PlayPageClient() {
       artPlayerRef.current.notice.show = '后续集数均已屏蔽';
       artPlayerRef.current.pause();
     }
+  };
+
+  handleNextEpisodeRef.current = () => {
+    void handleNextEpisode();
+  };
+  handlePreviousEpisodeRef.current = () => {
+    void handlePreviousEpisode();
   };
 
   // ---------------------------------------------------------------------------
@@ -7157,7 +7286,7 @@ function PlayPageClient() {
     // Alt + 左箭头 = 上一集
     if (e.altKey && e.key === 'ArrowLeft') {
       if (detailRef.current && currentEpisodeIndexRef.current > 0) {
-        handlePreviousEpisode();
+        handlePreviousEpisodeRef.current?.();
         e.preventDefault();
       }
     }
@@ -7167,7 +7296,7 @@ function PlayPageClient() {
       const d = detailRef.current;
       const idx = currentEpisodeIndexRef.current;
       if (d && idx < d.episodes.length - 1) {
-        handleNextEpisode();
+        handleNextEpisodeRef.current?.();
         e.preventDefault();
       }
     }
@@ -7279,6 +7408,16 @@ function PlayPageClient() {
     const currentTime = player.currentTime || 0;
     const duration = player.duration || 0;
     const playTime = Math.floor(currentTime);
+
+    // 播放器还停在上一集时，不能把那个时间写进新集的进度。
+    if (
+      !isPlaybackOnSelectedEpisode(
+        playbackEpisodeRef.current,
+        currentEpisodeIndexRef.current
+      )
+    ) {
+      return;
+    }
 
     // 如果播放时间太短（少于5秒）或者视频时长无效，不保存
     if (currentTime < 1 || !duration) {
@@ -7986,7 +8125,13 @@ function PlayPageClient() {
               });
 
               let lastHlsMediaTime = hlsPlayheadRef.current;
+              const boundEpisode = currentEpisodeIndexRef.current;
+              const playheadStillCurrent = () =>
+                currentEpisodeIndexRef.current === boundEpisode;
               const rememberHlsMediaTime = () => {
+                if (!playheadStillCurrent()) {
+                  return;
+                }
                 lastHlsMediaTime = rememberHlsPlayhead(
                   Math.max(lastHlsMediaTime, hlsPlayheadRef.current),
                   video.currentTime
@@ -7995,11 +8140,15 @@ function PlayPageClient() {
                   hlsPlayheadRef.current,
                   lastHlsMediaTime
                 );
+                hlsPlayheadEpisodeRef.current = boundEpisode;
               };
               video.addEventListener('timeupdate', rememberHlsMediaTime);
               video.addEventListener('seeking', rememberHlsMediaTime);
 
               const persistFailedHlsPlayhead = (failedAt: number) => {
+                if (!playheadStillCurrent()) {
+                  return 0;
+                }
                 const remembered = rememberFailedHlsPlayhead(
                   hlsFailedPlayheadRef.current,
                   failedAt
@@ -8008,11 +8157,12 @@ function PlayPageClient() {
                   return 0;
                 }
                 hlsFailedPlayheadRef.current = remembered;
+                hlsFailedPlayheadEpisodeRef.current = boundEpisode;
                 writeFailedHlsPlayhead(
                   hlsBadSpliceStorageKey(
                     currentSourceRef.current,
                     currentIdRef.current,
-                    currentEpisodeIndexRef.current
+                    boundEpisode
                   ),
                   remembered
                 );
@@ -8020,6 +8170,9 @@ function PlayPageClient() {
               };
 
               const skipPastBrokenHlsSplice = (reason: string) => {
+                if (!playheadStillCurrent()) {
+                  return -1;
+                }
                 const media =
                   document.querySelector('video') || hls.media || video;
                 rememberHlsMediaTime();
@@ -8039,6 +8192,7 @@ function PlayPageClient() {
                 const skipTo = failedAt + HLS_RECOVER_SKIP_SECONDS;
                 lastHlsMediaTime = skipTo;
                 hlsPlayheadRef.current = skipTo;
+                hlsPlayheadEpisodeRef.current = boundEpisode;
                 resumeTimeRef.current = skipTo;
                 console.log('媒体错误，跳过损坏切口到:', skipTo, reason);
                 const liveHls = (media as any)?.hls || hls;
@@ -8181,6 +8335,9 @@ function PlayPageClient() {
               });
 
               hls.on(Hls.Events.ERROR, function (event: any, data: any) {
+                if (!playheadStillCurrent()) {
+                  return;
+                }
                 console.error('HLS Error:', event, data);
                 unstickIfDecodeFailed(
                   data.fatal ? 'hls.fatal.decode' : 'hls.append.decode'
@@ -8278,6 +8435,7 @@ function PlayPageClient() {
                         persistFailedHlsPlayhead(lastPlayhead);
                         lastHlsMediaTime = decision.startPosition;
                         hlsPlayheadRef.current = decision.startPosition;
+                        hlsPlayheadEpisodeRef.current = boundEpisode;
                         resumeTimeRef.current = decision.startPosition;
                         console.log(
                           '媒体错误，跳过损坏切口到:',
@@ -8833,7 +8991,7 @@ function PlayPageClient() {
                   }
                   return;
                 }
-                handleNextEpisode();
+                handleNextEpisodeRef.current?.();
               },
             },
             // iOS 设备上添加自定义全屏按钮（横屏和竖屏都显示）
@@ -10096,27 +10254,27 @@ function PlayPageClient() {
 
         // 监听视频可播放事件，这时恢复播放进度更可靠
         artPlayerRef.current.on('video:canplay', () => {
+          const selectedEpisode = currentEpisodeIndexRef.current;
+          const resumeDecision = resolveEpisodeResumeAction({
+            targetEpisode: selectedEpisode,
+            episodeProgress: resumeTimeRef.current,
+            livePlayhead: hlsPlayheadRef.current,
+            livePlayheadEpisode: hlsPlayheadEpisodeRef.current,
+            failedPlayhead: hlsFailedPlayheadRef.current,
+            failedPlayheadEpisode: hlsFailedPlayheadEpisodeRef.current,
+            currentTime: Number(artPlayerRef.current.currentTime) || 0,
+            duration: Number(artPlayerRef.current.duration) || 0,
+          });
           let restoredResumeTime = false;
+          const target = resumeDecision.action === 'seek' ? resumeDecision.time : 0;
 
-          // 若存在需要恢复的播放进度，则跳转
-          const preferredResumeTime = resolveSafeResumeTime(
-            resolvePreferredResumeTime(
-              resumeTimeRef.current,
-              hlsPlayheadRef.current,
-              Number(artPlayerRef.current.currentTime) || 0
-            ),
-            hlsFailedPlayheadRef.current
-          );
-          if (preferredResumeTime && preferredResumeTime > 0) {
+          // 上一集的播放头不会进到这里。新集要么从 0 开始，要么跳到这一集自己的进度。
+          if (resumeDecision.action === 'seek') {
             try {
-              const duration = artPlayerRef.current.duration || 0;
-              let target = preferredResumeTime;
-              if (duration && target >= duration - 2) {
-                target = Math.max(0, duration - 5);
-              }
               artPlayerRef.current.currentTime = target;
               hlsPlayheadRef.current = target;
-              restoredResumeTime = true;
+              hlsPlayheadEpisodeRef.current = selectedEpisode;
+              restoredResumeTime = target > 0;
               console.log('成功恢复播放进度到:', target);
               schedulePlayerTimeout(() => {
                 const player = artPlayerRef.current;
@@ -10142,16 +10300,18 @@ function PlayPageClient() {
                   Math.max(target, Number(media.currentTime) || 0)
                 );
                 hlsFailedPlayheadRef.current = failedAt;
+                hlsFailedPlayheadEpisodeRef.current = selectedEpisode;
                 writeFailedHlsPlayhead(
                   hlsBadSpliceStorageKey(
                     currentSourceRef.current,
                     currentIdRef.current,
-                    currentEpisodeIndexRef.current
+                    selectedEpisode
                   ),
                   failedAt
                 );
                 const skipTo = failedAt + HLS_RECOVER_SKIP_SECONDS;
                 hlsPlayheadRef.current = skipTo;
+                hlsPlayheadEpisodeRef.current = selectedEpisode;
                 resumeTimeRef.current = skipTo;
                 console.log('媒体错误，跳过损坏切口到:', skipTo, 'canplay.watchdog');
                 try {
@@ -10176,8 +10336,15 @@ function PlayPageClient() {
             } catch (err) {
               console.warn('恢复播放进度失败:', err);
             }
+          } else {
+            // 不能把上一集尚未清掉的播放头标成这一集，否则下一次 canplay 会再次跳到片尾。
+            if (hlsPlayheadEpisodeRef.current !== selectedEpisode) {
+              hlsPlayheadRef.current = 0;
+            }
+            hlsPlayheadEpisodeRef.current = selectedEpisode;
           }
           resumeTimeRef.current = null;
+          playbackEpisodeRef.current = selectedEpisode;
 
           const shouldResumePlaying =
             resumePlayingAfterHlsModeSwitchRef.current;
@@ -10463,29 +10630,27 @@ function PlayPageClient() {
           if (now - lastSkipCheckRef.current < 1500) return;
           lastSkipCheckRef.current = now;
 
-          // 跳过片头
-          if (
-            skipConfigRef.current.intro_time > 0 &&
-            currentTime < skipConfigRef.current.intro_time
-          ) {
-            artPlayerRef.current.currentTime = skipConfigRef.current.intro_time;
+          const { skipIntroTo, reachedOutro } = resolveSkipBoundaries({
+            currentTime,
+            duration,
+            introTime: skipConfigRef.current.intro_time,
+            outroTime: skipConfigRef.current.outro_time,
+          });
+
+          // 片头片尾按当前这一集的时钟判断，不使用上一集的 play_time。
+          if (skipIntroTo != null) {
+            artPlayerRef.current.currentTime = skipIntroTo;
             artPlayerRef.current.notice.show = `已跳过片头 (${formatTime(
-              skipConfigRef.current.intro_time
+              skipIntroTo
             )})`;
           }
 
-          // 跳过片尾
-          if (
-            skipConfigRef.current.outro_time < 0 &&
-            duration > 0 &&
-            currentTime >
-            artPlayerRef.current.duration + skipConfigRef.current.outro_time
-          ) {
+          if (reachedOutro) {
             if (
               currentEpisodeIndexRef.current <
               (detailRef.current?.episodes?.length || 1) - 1
             ) {
-              handleNextEpisode();
+              handleNextEpisodeRef.current?.();
             } else {
               artPlayerRef.current.pause();
             }
@@ -10568,32 +10733,10 @@ function PlayPageClient() {
             return;
           }
 
-          const d = detailRef.current;
-          const idx = currentEpisodeIndexRef.current;
-
-          if (!d || !d.episodes || idx >= d.episodes.length - 1) {
-            return;
-          }
-
-          // 查找下一个未被过滤的集数
-          let nextIdx = idx + 1;
-          while (nextIdx < d.episodes.length) {
-            const episodeTitle = d.episodes_titles?.[nextIdx];
-            const isFiltered = episodeTitle && isEpisodeFilteredByTitle(episodeTitle);
-
-            if (!isFiltered) {
-              setTimeout(() => {
-                setCurrentEpisodeIndex(nextIdx);
-              }, 1000);
-              return;
-            }
-            nextIdx++;
-          }
-
-          // 所有后续集数都被屏蔽
-          if (artPlayerRef.current) {
-            artPlayerRef.current.notice.show = '后续集数均已屏蔽，已自动停止';
-          }
+          // 走和手动下一集相同的切集准备：保存本集进度，并让下一集从自己的进度或 0 开始。
+          setTimeout(() => {
+            handleNextEpisodeRef.current?.();
+          }, 1000);
         });
 
         artPlayerRef.current.on('video:timeupdate', () => {
