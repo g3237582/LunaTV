@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
     }
 
     const payload = await lxGetJson<unknown>(`/api/music/search?name=${encodeURIComponent(q)}&source=${source}&type=${type}&page=${page}&limit=${limit}`, 'none');
-    const { list, total } = readLxSearchResult(payload);
+    const { list, total } = readLxSearchResult(payload, source);
 
     return NextResponse.json(
       {

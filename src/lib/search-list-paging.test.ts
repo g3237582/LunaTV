@@ -2,6 +2,7 @@ import {
   clampSearchPage,
   musicSearchCountLabel,
   musicSearchPageLimit,
+  musicSearchPagerLabel,
   readLxSearchResult,
   SEARCH_LIST_PAGE_SIZE,
   searchListPageCount,
@@ -125,6 +126,47 @@ describe('musicSearchCountLabel', () => {
   });
 });
 
+describe('musicSearchPagerLabel', () => {
+  it('shows the current page, total pages, and catalog size', () => {
+    expect(
+      musicSearchPagerLabel({
+        page: 2,
+        count: 20,
+        pageSize: 20,
+        total: 312,
+        hasMore: true,
+        unit: '首',
+      })
+    ).toEqual({ label: '2 / 16 页 · 共 312 首', pageCount: 16 });
+  });
+
+  it('counts pages by the 20-song page size', () => {
+    expect(
+      musicSearchPagerLabel({
+        page: 1,
+        count: 20,
+        pageSize: 20,
+        total: 21,
+        hasMore: true,
+        unit: '首',
+      })
+    ).toEqual({ label: '1 / 2 页 · 共 21 首', pageCount: 2 });
+  });
+
+  it('does not invent a page count when the total is missing', () => {
+    expect(
+      musicSearchPagerLabel({
+        page: 2,
+        count: 20,
+        pageSize: 20,
+        total: null,
+        hasMore: true,
+        unit: '首',
+      })
+    ).toEqual({ label: '第 2 页', pageCount: null });
+  });
+});
+
 describe('readLxSearchResult', () => {
   it('keeps a bare song array and records that there is no total', () => {
     const list = [{ id: '1' }, { id: '2' }];
@@ -140,6 +182,18 @@ describe('readLxSearchResult', () => {
     expect(readLxSearchResult({ list, total: '88' })).toEqual({
       list,
       total: 88,
+    });
+  });
+
+  it('drops QQ totals because estimate_sum is not an exact count', () => {
+    const list = [{ id: '1' }];
+    expect(readLxSearchResult({ list, total: 312 }, 'tx')).toEqual({
+      list,
+      total: null,
+    });
+    expect(readLxSearchResult({ list, total: 312 }, 'wy')).toEqual({
+      list,
+      total: 312,
     });
   });
 });

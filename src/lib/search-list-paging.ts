@@ -45,9 +45,13 @@ export function musicSearchPageLimit(type: string): number {
 
 /**
  * lxserver 的 HTTP 搜索目前只回列表，SDK 里的 total 被丢掉。
- * 如果响应已经是 { list, total }，把总数留下来给徽章用。
+ * 如果响应已经是 { list, total }，把总数留下来。
+ * QQ 的 total 来自 estimate_sum，是估算，不当成精确曲库总数。
  */
-export function readLxSearchResult(payload: unknown): {
+export function readLxSearchResult(
+  payload: unknown,
+  source?: string
+): {
   list: unknown[];
   total: number | null;
 } {
@@ -63,7 +67,8 @@ export function readLxSearchResult(payload: unknown): {
     : Array.isArray(record.data)
     ? record.data
     : [];
-  return { list, total: readSearchTotal(record.total) };
+  const total = source === 'tx' ? null : readSearchTotal(record.total);
+  return { list, total };
 }
 
 function readSearchTotal(value: unknown): number | null {
@@ -105,6 +110,38 @@ export function musicSearchCountLabel({
     return `共 ${total} ${unit}`;
   }
   return start === end ? `${start} ${unit}` : `${start}-${end} ${unit}`;
+}
+
+/**
+ * 底部分页。有可靠总数时显示「2 / 16 页 · 共 312 首」，页数按 ceil(total / pageSize)。
+ * 没有可靠总数时只显示「第 2 页」，不编造总页数。
+ */
+export function musicSearchPagerLabel({
+  page,
+  count,
+  pageSize = SONG_SEARCH_PAGE_SIZE,
+  total,
+  hasMore,
+  unit = '首',
+}: {
+  page: number;
+  count: number;
+  pageSize?: number;
+  total?: number | null;
+  hasMore?: boolean;
+  unit?: string;
+}): { label: string; pageCount: number | null } {
+  const size = pageSize > 0 ? pageSize : SONG_SEARCH_PAGE_SIZE;
+  const current = Number.isFinite(page) && page >= 1 ? Math.floor(page) : 1;
+  const end = count > 0 ? songSearchStartIndex(current, size) + count : 0;
+  if (count > 0 && isCatalogTotal(total, end, hasMore)) {
+    const pageCount = Math.ceil(total / size);
+    return {
+      label: `${current} / ${pageCount} 页 · 共 ${total} ${unit}`,
+      pageCount,
+    };
+  }
+  return { label: `第 ${current} 页`, pageCount: null };
 }
 
 function isCatalogTotal(

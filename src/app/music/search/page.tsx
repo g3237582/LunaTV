@@ -9,6 +9,7 @@ import { parsePageParam, sliceMusicPage, withPageQuery } from '@/lib/music-page-
 import {
   musicSearchCountLabel,
   musicSearchPageLimit,
+  musicSearchPagerLabel,
   songSearchStartIndex,
 } from '@/lib/search-list-paging';
 
@@ -427,6 +428,14 @@ export default function MusicSearchPage() {
         hasMore,
         unit: resultUnit,
       });
+  const pager = musicSearchPagerLabel({
+    page,
+    count: resultCount,
+    pageSize: musicSearchPageLimit(searchType),
+    total: resultTotal,
+    hasMore,
+    unit: resultUnit,
+  });
 
   const title = detailTitle || q || '发现音乐';
   const subtitle = q
@@ -570,16 +579,12 @@ export default function MusicSearchPage() {
           page={detailPaged.page}
           onPageChanged={setDetailPage}
         />
-      ) : q && selectedType === 'song' ? (
-        <MusicPaginationBar
-          page={page}
-          hasMore={hasMore}
-          onPageChanged={(next) => router.push(withPageQuery(searchHref, next))}
-        />
       ) : q ? (
         <MusicPaginationBar
           page={page}
           hasMore={hasMore}
+          pageLabel={pager.label}
+          pageCount={pager.pageCount}
           onPageChanged={(next) => router.push(withPageQuery(searchHref, next))}
         />
       ) : null}
