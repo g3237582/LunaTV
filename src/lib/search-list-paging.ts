@@ -43,6 +43,82 @@ export function musicSearchPageLimit(type: string): number {
   return type === 'song' ? SONG_SEARCH_PAGE_SIZE : SEARCH_LIST_PAGE_SIZE;
 }
 
+/**
+ * lxserver 的 HTTP 搜索目前只回列表，SDK 里的 total 被丢掉。
+ * 如果响应已经是 { list, total }，把总数留下来给徽章用。
+ */
+export function readLxSearchResult(payload: unknown): {
+  list: unknown[];
+  total: number | null;
+} {
+  if (Array.isArray(payload)) {
+    return { list: payload, total: null };
+  }
+  if (!payload || typeof payload !== 'object') {
+    return { list: [], total: null };
+  }
+  const record = payload as { list?: unknown; data?: unknown; total?: unknown };
+  const list = Array.isArray(record.list)
+    ? record.list
+    : Array.isArray(record.data)
+    ? record.data
+    : [];
+  return { list, total: readSearchTotal(record.total) };
+}
+
+function readSearchTotal(value: unknown): number | null {
+  if (typeof value === 'string') {
+    if (value.trim() === '') return null;
+    return readSearchTotal(Number(value));
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  return Math.floor(value);
+}
+
+/**
+ * 右上角数量。有可靠总数时显示「共 N 首」；
+ * 上游只给了当前页时显示这一页在结果里的区间，例如第 2 页「21-40 首」。
+ * 总数如果只等于当前已看到的末尾、后面却还有页，那只是页长，不当成曲库总数。
+ */
+export function musicSearchCountLabel({
+  page,
+  count,
+  pageSize = SONG_SEARCH_PAGE_SIZE,
+  total,
+  hasMore,
+  unit = '首',
+}: {
+  page: number;
+  count: number;
+  pageSize?: number;
+  total?: number | null;
+  hasMore?: boolean;
+  unit?: string;
+}): string | null {
+  if (count <= 0) return null;
+  const size = pageSize > 0 ? pageSize : SONG_SEARCH_PAGE_SIZE;
+  const start = songSearchStartIndex(page, size) + 1;
+  const end = start + count - 1;
+  if (isCatalogTotal(total, end, hasMore)) {
+    return `共 ${total} ${unit}`;
+  }
+  return start === end ? `${start} ${unit}` : `${start}-${end} ${unit}`;
+}
+
+function isCatalogTotal(
+  total: number | null | undefined,
+  end: number,
+  hasMore?: boolean
+): total is number {
+  if (typeof total !== 'number' || !Number.isFinite(total) || total < end) {
+    return false;
+  }
+  if (hasMore && total <= end) return false;
+  return true;
+}
+
 export function searchListPageCount(
   totalItems: number,
   pageSize = SEARCH_LIST_PAGE_SIZE

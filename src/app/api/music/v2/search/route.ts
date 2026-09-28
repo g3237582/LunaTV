@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { isMusicSource, lxGetJson, LxServerSong, normalizeLxSong } from '@/lib/music-v2';
 import { badRequest, internalError } from '@/lib/music-v2-api';
-import { musicSearchHasMore } from '@/lib/search-list-paging';
+import { musicSearchHasMore, readLxSearchResult } from '@/lib/search-list-paging';
 
 export const runtime = 'nodejs';
 
@@ -22,7 +22,8 @@ export async function GET(request: NextRequest) {
       return badRequest('当前音源不支持歌手/专辑搜索');
     }
 
-    const list = await lxGetJson<any[]>(`/api/music/search?name=${encodeURIComponent(q)}&source=${source}&type=${type}&page=${page}&limit=${limit}`, 'none');
+    const payload = await lxGetJson<unknown>(`/api/music/search?name=${encodeURIComponent(q)}&source=${source}&type=${type}&page=${page}&limit=${limit}`, 'none');
+    const { list, total } = readLxSearchResult(payload);
 
     return NextResponse.json(
       {
@@ -32,6 +33,7 @@ export async function GET(request: NextRequest) {
           type,
           page,
           limit,
+          total,
           hasMore: musicSearchHasMore(list, limit, type),
         },
       },
