@@ -43,6 +43,119 @@ export function musicSearchPageLimit(type: string): number {
   return type === 'song' ? SONG_SEARCH_PAGE_SIZE : SEARCH_LIST_PAGE_SIZE;
 }
 
+/**
+ * lxserver 的 HTTP 搜索目前只回列表，SDK 里的 total 被丢掉。
+ * 如果响应已经是 { list, total }，把总数留下来。
+ * QQ 的 total 来自 estimate_sum，是估算，不当成精确曲库总数。
+ */
+export function readLxSearchResult(
+  payload: unknown,
+  source?: string
+): {
+  list: unknown[];
+  total: number | null;
+} {
+  if (Array.isArray(payload)) {
+    return { list: payload, total: null };
+  }
+  if (!payload || typeof payload !== 'object') {
+    return { list: [], total: null };
+  }
+  const record = payload as { list?: unknown; data?: unknown; total?: unknown };
+  const list = Array.isArray(record.list)
+    ? record.list
+    : Array.isArray(record.data)
+    ? record.data
+    : [];
+  const total = source === 'tx' ? null : readSearchTotal(record.total);
+  return { list, total };
+}
+
+function readSearchTotal(value: unknown): number | null {
+  if (typeof value === 'string') {
+    if (value.trim() === '') return null;
+    return readSearchTotal(Number(value));
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  return Math.floor(value);
+}
+
+/**
+ * 右上角数量。有可靠总数时显示「共 N 首」；
+ * 上游只给了当前页时显示这一页在结果里的区间，例如第 2 页「21-40 首」。
+ * 总数如果只等于当前已看到的末尾、后面却还有页，那只是页长，不当成曲库总数。
+ */
+export function musicSearchCountLabel({
+  page,
+  count,
+  pageSize = SONG_SEARCH_PAGE_SIZE,
+  total,
+  hasMore,
+  unit = '首',
+}: {
+  page: number;
+  count: number;
+  pageSize?: number;
+  total?: number | null;
+  hasMore?: boolean;
+  unit?: string;
+}): string | null {
+  if (count <= 0) return null;
+  const size = pageSize > 0 ? pageSize : SONG_SEARCH_PAGE_SIZE;
+  const start = songSearchStartIndex(page, size) + 1;
+  const end = start + count - 1;
+  if (isCatalogTotal(total, end, hasMore)) {
+    return `共 ${total} ${unit}`;
+  }
+  return start === end ? `${start} ${unit}` : `${start}-${end} ${unit}`;
+}
+
+/**
+ * 底部分页。有可靠总数时显示「2 / 16 页 · 共 312 首」，页数按 ceil(total / pageSize)。
+ * 没有可靠总数时只显示「第 2 页」，不编造总页数。
+ */
+export function musicSearchPagerLabel({
+  page,
+  count,
+  pageSize = SONG_SEARCH_PAGE_SIZE,
+  total,
+  hasMore,
+  unit = '首',
+}: {
+  page: number;
+  count: number;
+  pageSize?: number;
+  total?: number | null;
+  hasMore?: boolean;
+  unit?: string;
+}): { label: string; pageCount: number | null } {
+  const size = pageSize > 0 ? pageSize : SONG_SEARCH_PAGE_SIZE;
+  const current = Number.isFinite(page) && page >= 1 ? Math.floor(page) : 1;
+  const end = count > 0 ? songSearchStartIndex(current, size) + count : 0;
+  if (count > 0 && isCatalogTotal(total, end, hasMore)) {
+    const pageCount = Math.ceil(total / size);
+    return {
+      label: `${current} / ${pageCount} 页 · 共 ${total} ${unit}`,
+      pageCount,
+    };
+  }
+  return { label: `第 ${current} 页`, pageCount: null };
+}
+
+function isCatalogTotal(
+  total: number | null | undefined,
+  end: number,
+  hasMore?: boolean
+): total is number {
+  if (typeof total !== 'number' || !Number.isFinite(total) || total < end) {
+    return false;
+  }
+  if (hasMore && total <= end) return false;
+  return true;
+}
+
 export function searchListPageCount(
   totalItems: number,
   pageSize = SEARCH_LIST_PAGE_SIZE

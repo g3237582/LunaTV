@@ -61,6 +61,7 @@ describe('GET /api/music/v2/search', () => {
     expect(response.status).toBe(200);
     expect(body.data.list).toHaveLength(20);
     expect(body.data.hasMore).toBe(true);
+    expect(body.data.total).toBeNull();
     expect(mockedLxGetJson).toHaveBeenCalledTimes(1);
     expect(mockedLxGetJson).toHaveBeenCalledWith(
       expect.stringContaining('/api/music/search?'),
@@ -114,6 +115,45 @@ describe('GET /api/music/v2/search', () => {
 
     expect(body.data.list).toHaveLength(24);
     expect(body.data.hasMore).toBe(true);
+  });
+
+  it('passes a catalog total through when lxserver returns the SDK object', async () => {
+    mockedLxGetJson.mockResolvedValue({
+      list: songs(20, 'wy'),
+      total: 312,
+      allPage: 16,
+      limit: 20,
+      source: 'wy',
+    } as never);
+
+    const response = await GET(
+      searchRequest({ source: 'wy', type: 'song', page: '2', limit: '20' })
+    );
+    const body = await response.json();
+
+    expect(body.data.list).toHaveLength(20);
+    expect(body.data.list[0].name).toBe('歌曲1');
+    expect(body.data.hasMore).toBe(true);
+    expect(body.data.total).toBe(312);
+    expect(mockedLxGetJson).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat a QQ estimate as an exact catalog total', async () => {
+    mockedLxGetJson.mockResolvedValue({
+      list: songs(20, 'tx'),
+      total: 312,
+      allPage: 16,
+      source: 'tx',
+    } as never);
+
+    const response = await GET(
+      searchRequest({ source: 'tx', type: 'song', page: '1', limit: '20' })
+    );
+    const body = await response.json();
+
+    expect(body.data.list).toHaveLength(20);
+    expect(body.data.hasMore).toBe(true);
+    expect(body.data.total).toBeNull();
   });
 
   it('keeps singer and album pagination tied to the requested limit', async () => {

@@ -1,19 +1,26 @@
 'use client';
 
-import SearchPaginationBar from '@/components/SearchPaginationBar';
 import { MUSIC_LIST_PAGE_SIZE, musicPageState } from '@/lib/music-page-data';
+
+import SearchPaginationBar from '@/components/SearchPaginationBar';
 
 export default function MusicPaginationBar({
   totalItems,
   page,
   pageSize = MUSIC_LIST_PAGE_SIZE,
   hasMore,
+  pageLabel,
+  pageCount,
   onPageChanged,
 }: {
   totalItems?: number;
   page: number;
   pageSize?: number;
   hasMore?: boolean;
+  /** 搜索分页的中间文案。不传时仍只显示页码，避免影响别的列表。 */
+  pageLabel?: string;
+  /** 已知总页数时，下一页停在最后一页，不再只看 hasMore。 */
+  pageCount?: number | null;
   onPageChanged: (page: number) => void;
 }) {
   if (typeof totalItems === 'number') {
@@ -30,13 +37,16 @@ export default function MusicPaginationBar({
   }
 
   const canPrev = page > 1;
-  const canNext = Boolean(hasMore);
+  const canNext =
+    typeof pageCount === 'number' && pageCount > 0
+      ? page < pageCount
+      : Boolean(hasMore);
   if (!canPrev && !canNext) return null;
 
   return (
-    <div className="mt-6 mb-2 flex items-center justify-end gap-3">
+    <div className='mt-6 mb-2 flex items-center justify-end gap-3'>
       <button
-        type="button"
+        type='button'
         disabled={!canPrev}
         onClick={() => onPageChanged(page - 1)}
         className={`text-sm font-medium transition-colors ${
@@ -47,9 +57,11 @@ export default function MusicPaginationBar({
       >
         上一页
       </button>
-      <span className="text-sm font-semibold text-green-500">{page}</span>
+      <span className='text-sm font-semibold text-green-500'>
+        {pageLabel || page}
+      </span>
       <button
-        type="button"
+        type='button'
         disabled={!canNext}
         onClick={() => onPageChanged(page + 1)}
         className={`text-sm font-medium transition-colors ${

@@ -6,7 +6,12 @@ import { useCallback, useEffect, useState } from 'react';
 
 import MusicPaginationBar from '@/components/music/MusicPaginationBar';
 import { parsePageParam, sliceMusicPage, withPageQuery } from '@/lib/music-page-data';
-import { musicSearchPageLimit, songSearchStartIndex } from '@/lib/search-list-paging';
+import {
+  musicSearchCountLabel,
+  musicSearchPageLimit,
+  musicSearchPagerLabel,
+  songSearchStartIndex,
+} from '@/lib/search-list-paging';
 
 import CoverCard from '@/components/music/CoverCard';
 import MusicEmpty, {
@@ -206,6 +211,7 @@ export default function MusicSearchPage() {
   // 首屏直接是热搜面板，不会闪一下骨架。
   const [loading, setLoading] = useState(!!q);
   const [hasMore, setHasMore] = useState(false);
+  const [resultTotal, setResultTotal] = useState<number | null>(null);
   const [detailTitle, setDetailTitle] = useState('');
   const [detailPage, setDetailPage] = useState(1);
   const page = parsePageParam(searchParams.get('page'));
@@ -273,6 +279,7 @@ export default function MusicSearchPage() {
       const data = await res.json();
       const list = data.data?.list || [];
       const nextHasMore = Boolean(data.data?.hasMore);
+      const nextTotal = typeof data.data?.total === 'number' ? data.data.total : null;
 
       if (searchType === 'singer') {
         setSingers(list);
@@ -289,12 +296,14 @@ export default function MusicSearchPage() {
       }
 
       setHasMore(nextHasMore);
+      setResultTotal(nextTotal);
     } catch (error: any) {
       if (error?.name !== 'AbortError') {
         setSongs([]);
         setSingers([]);
         setAlbums([]);
         setHasMore(false);
+        setResultTotal(null);
       }
     } finally {
       if (!signal?.aborted) setLoading(false);
@@ -313,6 +322,7 @@ export default function MusicSearchPage() {
       setAlbums([]);
       setDetailTitle('');
       setHasMore(false);
+      setResultTotal(null);
       return;
     }
     const controller = new AbortController();
@@ -406,6 +416,26 @@ export default function MusicSearchPage() {
   const currentTypeLabel = searchTypeOptions.find((item) => item.key === selectedType)?.label || '歌曲';
   const resultCount = selectedType === 'song' ? songs.length : selectedType === 'singer' ? singers.length : albums.length;
   const resultUnit = selectedType === 'song' ? '首' : selectedType === 'singer' ? '位' : '张';
+  const countLabel = detailTitle
+    ? songs.length > 0
+      ? `${songs.length} 首`
+      : null
+    : musicSearchCountLabel({
+        page,
+        count: resultCount,
+        pageSize: musicSearchPageLimit(searchType),
+        total: resultTotal,
+        hasMore,
+        unit: resultUnit,
+      });
+  const pager = musicSearchPagerLabel({
+    page,
+    count: resultCount,
+    pageSize: musicSearchPageLimit(searchType),
+    total: resultTotal,
+    hasMore,
+    unit: resultUnit,
+  });
 
   const title = detailTitle || q || '发现音乐';
   const subtitle = q
@@ -422,11 +452,7 @@ export default function MusicSearchPage() {
       subtitle={subtitle}
       actions={
         <>
-          {resultCount > 0 ? (
-            <span className={MUSIC_COUNT}>
-              {resultCount} {resultUnit}
-            </span>
-          ) : null}
+          {countLabel ? <span className={MUSIC_COUNT}>{countLabel}</span> : null}
           <MusicSwitch
             field='音源'
             value={selectedSource}
@@ -553,16 +579,12 @@ export default function MusicSearchPage() {
           page={detailPaged.page}
           onPageChanged={setDetailPage}
         />
-      ) : q && selectedType === 'song' ? (
-        <MusicPaginationBar
-          page={page}
-          hasMore={hasMore}
-          onPageChanged={(next) => router.push(withPageQuery(searchHref, next))}
-        />
       ) : q ? (
         <MusicPaginationBar
           page={page}
           hasMore={hasMore}
+          pageLabel={pager.label}
+          pageCount={pager.pageCount}
           onPageChanged={(next) => router.push(withPageQuery(searchHref, next))}
         />
       ) : null}
