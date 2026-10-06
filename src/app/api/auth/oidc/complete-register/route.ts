@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { writeAuthCookie } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
+import { verifyOidcSession } from '@/lib/oidc-session';
 import {
   generateRefreshToken,
   generateTokenId,
@@ -138,10 +139,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let oidcSession: any;
-    try {
-      oidcSession = JSON.parse(oidcSessionCookie);
-    } catch {
+    // 校验会话签名(PASSWORD)，防止伪造cookie
+    const oidcSession = await verifyOidcSession(oidcSessionCookie);
+    if (!oidcSession) {
       return NextResponse.json(
         { error: 'OIDC会话无效' },
         { status: 400 }

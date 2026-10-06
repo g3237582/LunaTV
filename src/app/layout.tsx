@@ -142,6 +142,10 @@ export default async function RootLayout({
   let musicProxyEnabled = true;
   let advancedRecommendationEnabled = false;
   let localSettingsSyncMode: 'off' | 'manual' | 'auto' = 'off';
+  // 特殊源名单：供客户端按入口隔离收藏与播放记录。
+  // 入口开关是本机 cookie，与存储模式无关，所以 localstorage 模式也要注入；
+  // getConfig() 有模块级缓存，generateMetadata 里已经调过一次，这里不产生额外读取。
+  const specialSourceApis = (await getConfig()).SpecialSourceApis || [];
   let userFeatureAccess =
     storageType === 'localstorage'
       ? await getUserFeatureAccess(process.env.USERNAME || 'localstorage-owner')
@@ -373,6 +377,7 @@ export default async function RootLayout({
     FESTIVE_EFFECT_ENABLED: process.env.FESTIVE_EFFECT_ENABLED === 'true',
     SITE_ID: getCurrentSite().id,
     AUTH_COOKIE_NAME: getCurrentSite().authCookieName,
+    SPECIAL_SOURCE_APIS: specialSourceApis,
     RATE_BADGE_STYLE: rateBadgeStyle,
   };
 
