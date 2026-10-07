@@ -6,6 +6,7 @@ import {
   rememberHlsPlayhead,
   rememberHlsRecoverState,
   resolveSafeResumeTime,
+  resolveTrackedPlayhead,
 } from './hls-recover';
 import { resolvePreferredResumeTime } from './hls-start-position';
 
@@ -26,6 +27,124 @@ describe('rememberHlsPlayhead', () => {
 
   it('does not let a stalled 3:54 playhead pull back a skip target', () => {
     expect(rememberHlsPlayhead(242.18, 234.18)).toBe(242.18);
+  });
+});
+
+describe('resolveTrackedPlayhead', () => {
+  it('keeps the tracked playhead when a sample moves backward without a user seek', () => {
+    expect(
+      resolveTrackedPlayhead({
+        tracked: 100,
+        observed: 40,
+        pendingUserSeek: null,
+      })
+    ).toEqual({ playhead: 100, pendingUserSeek: null });
+    expect(
+      resolveTrackedPlayhead({
+        tracked: 100,
+        observed: 0,
+        pendingUserSeek: null,
+      }).playhead
+    ).toBe(100);
+  });
+
+  it('follows a progress-bar seek backward, including a small step and the start', () => {
+    expect(
+      resolveTrackedPlayhead({
+        tracked: 100,
+        observed: 40,
+        pendingUserSeek: 40,
+      })
+    ).toEqual({ playhead: 40, pendingUserSeek: null });
+
+    expect(
+      resolveTrackedPlayhead({
+        tracked: 100,
+        observed: 100,
+        pendingUserSeek: 95,
+      })
+    ).toEqual({ playhead: 95, pendingUserSeek: 95 });
+
+    expect(
+      resolveTrackedPlayhead({
+        tracked: 100,
+        observed: 0.2,
+        pendingUserSeek: 0,
+      })
+    ).toEqual({ playhead: 0, pendingUserSeek: null });
+  });
+
+  it('still ignores a near-zero glitch while a backward seek has not landed', () => {
+    const holding = resolveTrackedPlayhead({
+      tracked: 100,
+      observed: 0.2,
+      pendingUserSeek: 40,
+    });
+    expect(holding).toEqual({ playhead: 40, pendingUserSeek: 40 });
+
+    expect(
+      resolveTrackedPlayhead({
+        tracked: holding.playhead,
+        observed: 40.4,
+        pendingUserSeek: holding.pendingUserSeek,
+      })
+    ).toEqual({ playhead: 40, pendingUserSeek: null });
+  });
+
+  it('adopts a backward seeking target from the progress bar before canplay', () => {
+    expect(
+      resolveTrackedPlayhead({
+        tracked: 100,
+        observed: 40,
+        pendingUserSeek: null,
+        adoptBackwardSeek: true,
+      })
+    ).toEqual({ playhead: 40, pendingUserSeek: null });
+
+    expect(
+      resolveTrackedPlayhead({
+        tracked: 100,
+        observed: 95,
+        pendingUserSeek: null,
+        adoptBackwardSeek: true,
+      })
+    ).toEqual({ playhead: 95, pendingUserSeek: null });
+  });
+
+  it('does not adopt a backward timeupdate or a near-zero seek', () => {
+    expect(
+      resolveTrackedPlayhead({
+        tracked: 242.18,
+        observed: 234.18,
+        pendingUserSeek: null,
+        adoptBackwardSeek: false,
+      }).playhead
+    ).toBe(242.18);
+    expect(
+      resolveTrackedPlayhead({
+        tracked: 100,
+        observed: 0.3,
+        pendingUserSeek: null,
+        adoptBackwardSeek: true,
+      }).playhead
+    ).toBe(100);
+  });
+
+  it('still moves forward and protects a skip target when the user is not scrubbing', () => {
+    expect(
+      resolveTrackedPlayhead({
+        tracked: 228,
+        observed: 234.18,
+        pendingUserSeek: null,
+      }).playhead
+    ).toBe(234.18);
+    expect(
+      resolveTrackedPlayhead({
+        tracked: 242.18,
+        observed: 234.18,
+        pendingUserSeek: null,
+      }).playhead
+    ).toBe(242.18);
   });
 });
 
@@ -88,11 +207,15 @@ describe('recover count buckets', () => {
   it('counts recoveries in the same splice window, including 3:48 vs 3:54', () => {
     expect(playheadBucket(228)).toBe(playheadBucket(234.18));
     expect(playheadBucket(234.18)).toBe(playheadBucket(235.9));
-    expect(nextRecoverCount(1, playheadBucket(234.18), playheadBucket(228))).toBe(2);
+    expect(
+      nextRecoverCount(1, playheadBucket(234.18), playheadBucket(228))
+    ).toBe(2);
   });
 
   it('resets after the playhead leaves the broken splice', () => {
-    expect(nextRecoverCount(3, playheadBucket(234.18), playheadBucket(260))).toBe(1);
+    expect(
+      nextRecoverCount(3, playheadBucket(234.18), playheadBucket(260))
+    ).toBe(1);
   });
 });
 
