@@ -3,7 +3,7 @@
 'use client';
 
 import { AlertTriangle,Star, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import {
@@ -12,6 +12,7 @@ import {
   getAllPlayRecords,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import { saveFavoritesReturn } from '@/lib/list-return-state';
 
 import VideoCard from '@/components/VideoCard';
 
@@ -31,15 +32,24 @@ interface FavoriteItem {
 interface FavoritesPanelProps {
   isOpen: boolean;
   onClose: () => void;
+  initialScrollTop?: number | null;
 }
 
 export const FavoritesPanel: React.FC<FavoritesPanelProps> = ({
   isOpen,
   onClose,
+  initialScrollTop = null,
 }) => {
   const [favoriteItems, setFavoriteItems] = useState<FavoriteItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (initialScrollTop == null || favoriteItems.length === 0) return;
+    if (!listRef.current) return;
+    listRef.current.scrollTop = initialScrollTop;
+  }, [favoriteItems.length, initialScrollTop]);
 
   // 加载收藏数据
   const loadFavorites = async () => {
@@ -164,7 +174,7 @@ export const FavoritesPanel: React.FC<FavoritesPanelProps> = ({
         </div>
 
         {/* 收藏列表 */}
-        <div className='flex-1 overflow-y-auto p-6'>
+        <div ref={listRef} className='flex-1 overflow-y-auto p-6'>
           {loading ? (
             <div className='flex items-center justify-center py-12'>
               <div className='w-8 h-8 border-4 border-yellow-500 border-t-transparent rounded-full animate-spin'></div>
@@ -183,6 +193,13 @@ export const FavoritesPanel: React.FC<FavoritesPanelProps> = ({
                     {...item}
                     from='favorite'
                     type={item.episodes && item.episodes > 1 ? 'tv' : ''}
+                    onBeforeNavigate={() => {
+                      saveFavoritesReturn(
+                        window.sessionStorage,
+                        window.location.pathname,
+                        listRef.current?.scrollTop || 0
+                      );
+                    }}
                   />
                 </div>
               ))}

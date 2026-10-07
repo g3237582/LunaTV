@@ -2,8 +2,19 @@
 
 import { Blend, Loader2 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
+import {
+  assignListPage,
+  consumeListReturn,
+  loadPagesInOrder,
+  readDocumentScrollTop,
+  readListPage,
+  rememberListScroll,
+  saveListReturn,
+  takeListScroll,
+  writeDocumentScrollTop,
+} from '@/lib/list-return-state';
 import { SearchResult } from '@/lib/types';
 
 import CapsuleSwitch from '@/components/CapsuleSwitch';
@@ -16,11 +27,20 @@ interface ScriptSourceOption {
   description?: string;
 }
 
+const ADVANCED_RETURN_KEY = 'list-return:advanced-recommendation';
+
+interface AdvancedReturnPayload {
+  selectedSource: string;
+  videos: SearchResult[];
+  hasMore: boolean;
+}
+
 export default function AdvancedRecommendationPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const initialUrlSourceRef = useRef(searchParams.get('source') || '');
+  const initialUrlPageRef = useRef(readListPage(searchParams.get('page')));
 
   const [sources, setSources] = useState<ScriptSourceOption[]>([]);
   const [selectedSource, setSelectedSource] = useState('');
@@ -28,10 +48,81 @@ export default function AdvancedRecommendationPage() {
   const [isLoadingSources, setIsLoadingSources] = useState(true);
   const [isLoadingVideos, setIsLoadingVideos] = useState(false);
   const [error, setError] = useState('');
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() => readListPage(searchParams.get('page')));
   const [hasMore, setHasMore] = useState(true);
   const initializedRef = useRef(false);
   const hasSyncedUrlRef = useRef(false);
+  const didInitSourceRef = useRef(false);
+  const skipFetchRef = useRef(false);
+  const backfillRef = useRef<number | null>(null);
+  const pendingScrollRef = useRef<number | null>(null);
+  const returnPayloadRef = useRef<AdvancedReturnPayload | null>(null);
+  const [listReady, setListReady] = useState(false);
+
+  useLayoutEffect(() => {
+    const saved = consumeListReturn<AdvancedReturnPayload>(
+      window.sessionStorage,
+      ADVANCED_RETURN_KEY
+    );
+    const savedScroll = takeListScroll(
+      window.sessionStorage,
+      window.location.pathname,
+      window.location.search
+    );
+    if (saved && saved.payload.videos.length > 0 && saved.payload.selectedSource) {
+      skipFetchRef.current = true;
+      setSelectedSource(saved.payload.selectedSource);
+      setVideos(saved.payload.videos);
+      setPage(saved.page);
+      setHasMore(saved.payload.hasMore);
+      pendingScrollRef.current =
+        saved.scrollTop > 0 ? saved.scrollTop : savedScroll;
+    } else {
+      if (page > 1) {
+        backfillRef.current = page;
+      }
+      if (savedScroll != null && savedScroll > 0) {
+        pendingScrollRef.current = savedScroll;
+      }
+    }
+    setListReady(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useLayoutEffect(() => {
+    if (pendingScrollRef.current == null || videos.length === 0) return;
+    if (backfillRef.current != null && page < backfillRef.current) return;
+    const top = pendingScrollRef.current;
+    pendingScrollRef.current = null;
+    writeDocumentScrollTop(top);
+    const rafId = window.requestAnimationFrame(() => writeDocumentScrollTop(top));
+    return () => window.cancelAnimationFrame(rafId);
+  }, [videos, page]);
+
+  useEffect(() => {
+    returnPayloadRef.current = {
+      selectedSource,
+      videos,
+      hasMore,
+    };
+  }, [selectedSource, videos, hasMore]);
+
+  const saveReturnState = useCallback(() => {
+    const payload = returnPayloadRef.current;
+    if (!payload || payload.videos.length === 0 || !payload.selectedSource) return;
+    const scrollTop = readDocumentScrollTop();
+    saveListReturn(window.sessionStorage, ADVANCED_RETURN_KEY, {
+      page,
+      scrollTop,
+      payload,
+    });
+    rememberListScroll(
+      window.sessionStorage,
+      window.location.pathname,
+      window.location.search,
+      scrollTop
+    );
+  }, [page]);
 
   useEffect(() => {
     const fetchSources = async () => {
@@ -71,18 +162,29 @@ export default function AdvancedRecommendationPage() {
     if (!initializedRef.current || !selectedSource) return;
     if (!hasSyncedUrlRef.current) {
       hasSyncedUrlRef.current = true;
-      if (initialUrlSourceRef.current === selectedSource) return;
+      if (
+        initialUrlSourceRef.current === selectedSource &&
+        initialUrlPageRef.current === page
+      ) {
+        return;
+      }
     }
 
-    const params = new URLSearchParams();
-    params.set('source', selectedSource);
+    const params = assignListPage(
+      new URLSearchParams([['source', selectedSource]]),
+      page
+    );
     router.replace(`/advanced-recommendation?${params.toString()}`, {
       scroll: false,
     });
-  }, [selectedSource, router]);
+  }, [selectedSource, page, router]);
 
   useEffect(() => {
     if (!selectedSource) return;
+    if (!didInitSourceRef.current) {
+      didInitSourceRef.current = true;
+      return;
+    }
 
     setVideos([]);
     setPage(1);
@@ -91,11 +193,37 @@ export default function AdvancedRecommendationPage() {
   }, [selectedSource]);
 
   useEffect(() => {
-    if (!selectedSource) return;
+    if (!listReady || !selectedSource) return;
+    if (skipFetchRef.current) {
+      skipFetchRef.current = false;
+      return;
+    }
 
     const fetchVideos = async () => {
       setIsLoadingVideos(true);
       try {
+        const targetPage = backfillRef.current;
+        if (targetPage && targetPage > 1) {
+          backfillRef.current = null;
+          const loaded = await loadPagesInOrder<SearchResult>(targetPage, async (pageNumber) => {
+            const response = await fetch(
+              `/api/advanced-recommendation/videos?source=${encodeURIComponent(selectedSource)}&page=${pageNumber}`
+            );
+            const data = await response.json();
+            if (!response.ok) {
+              throw new Error(data.error || '获取推荐失败');
+            }
+            const items = Array.isArray(data.results) ? data.results : [];
+            return {
+              items,
+              hasMore: Number(data.page || pageNumber) < Number(data.pageCount || 1),
+            };
+          });
+          setVideos(loaded.items);
+          setHasMore(loaded.hasMore);
+          if (loaded.page !== page) setPage(loaded.page);
+          return;
+        }
         const response = await fetch(
           `/api/advanced-recommendation/videos?source=${encodeURIComponent(selectedSource)}&page=${page}`
         );
@@ -117,7 +245,7 @@ export default function AdvancedRecommendationPage() {
     };
 
     fetchVideos();
-  }, [selectedSource, page]);
+  }, [listReady, selectedSource, page]);
 
   useEffect(() => {
     if (!loadMoreRef.current || !hasMore || isLoadingVideos || !!error) return;
@@ -205,6 +333,7 @@ export default function AdvancedRecommendationPage() {
                       douban_id={video.douban_id}
                       tmdb_id={video.tmdb_id}
                       from='source-search'
+                      onBeforeNavigate={saveReturnState}
                     />
                   ))}
                 </div>

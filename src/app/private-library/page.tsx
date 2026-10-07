@@ -4,9 +4,20 @@
 
 import { ArrowDownWideNarrow, ArrowUpNarrowWide,Film } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useMemo,useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import {
+  assignListPage,
+  consumeListReturn,
+  loadPagesInOrder,
+  readDocumentScrollTop,
+  readListPage,
+  rememberListScroll,
+  saveListReturn,
+  takeListScroll,
+  writeDocumentScrollTop,
+} from '@/lib/list-return-state';
 import { base58Encode } from '@/lib/utils';
 
 import CapsuleSwitch from '@/components/CapsuleSwitch';
@@ -40,6 +51,20 @@ interface EmbyView {
   type: string;
 }
 
+const PRIVATE_LIBRARY_RETURN_KEY = 'list-return:private-library';
+
+interface PrivateLibraryReturnPayload {
+  sourceType: LibrarySourceType;
+  embyKey?: string;
+  selectedView: string;
+  openlistCategory: string;
+  sortBy: string;
+  sortOrder: 'Ascending' | 'Descending';
+  videos: Video[];
+  hasMore: boolean;
+  xiaoyaPath: string;
+}
+
 export default function PrivateLibraryPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -64,17 +89,24 @@ export default function PrivateLibraryPage() {
     return { sourceType: sourceParam as LibrarySourceType };
   };
 
-  const [sourceType, setSourceType] = useState<LibrarySourceType>('openlist');
-  const [embyKey, setEmbyKey] = useState<string | undefined>();
+  const initialSource = parseSourceParam(searchParams.get('source'));
+  const [sourceType, setSourceType] = useState<LibrarySourceType>(
+    initialSource.sourceType || 'openlist'
+  );
+  const [embyKey, setEmbyKey] = useState<string | undefined>(
+    initialSource.embyKey
+  );
   const [embySourceOptions, setEmbySourceOptions] = useState<EmbySourceOption[]>([]);
   const [videos, setVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() => readListPage(searchParams.get('page')));
   const [hasMore, setHasMore] = useState(true);
   const [embyViews, setEmbyViews] = useState<EmbyView[]>([]);
-  const [selectedView, setSelectedView] = useState<string>('all');
+  const [selectedView, setSelectedView] = useState<string>(
+    () => searchParams.get('view') || 'all'
+  );
   const [loadingViews, setLoadingViews] = useState(false);
   // Emby排序状态
   const [sortBy, setSortBy] = useState<string>('SortName');
@@ -105,11 +137,121 @@ export default function PrivateLibraryPage() {
   const scrollLeftRef = useRef(0);
   const isInitializedRef = useRef(false);
   const hasRestoredViewRef = useRef(false);
+  const skipSourceResetRef = useRef(true);
+  const skipViewResetRef = useRef(true);
+  const skipCategoryResetRef = useRef(true);
+  const skipSortResetRef = useRef(true);
+  const skipFetchRef = useRef(false);
+  const backfillRef = useRef<number | null>(null);
+  const pendingScrollRef = useRef<number | null>(null);
+  const returnPayloadRef = useRef<PrivateLibraryReturnPayload | null>(null);
+  const [listReady, setListReady] = useState(false);
 
   // 客户端挂载标记
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useLayoutEffect(() => {
+    const saved = consumeListReturn<PrivateLibraryReturnPayload>(
+      window.sessionStorage,
+      PRIVATE_LIBRARY_RETURN_KEY
+    );
+    const savedScroll = takeListScroll(
+      window.sessionStorage,
+      window.location.pathname,
+      window.location.search
+    );
+    if (
+      saved &&
+      (saved.payload.videos.length > 0 ||
+        (saved.payload.xiaoyaPath && saved.payload.xiaoyaPath !== '/'))
+    ) {
+      if (saved.payload.videos.length > 0) {
+        skipFetchRef.current = true;
+      }
+      setSourceType(saved.payload.sourceType);
+      setEmbyKey(saved.payload.embyKey);
+      setSelectedView(saved.payload.selectedView);
+      setOpenlistCategory(saved.payload.openlistCategory);
+      setSortBy(saved.payload.sortBy);
+      setSortOrder(saved.payload.sortOrder);
+      setXiaoyaPath(saved.payload.xiaoyaPath);
+      setVideos(saved.payload.videos);
+      setPage(saved.page);
+      setHasMore(saved.payload.hasMore);
+      setLoading(false);
+      pendingScrollRef.current =
+        saved.scrollTop > 0 ? saved.scrollTop : savedScroll;
+    } else {
+      if (page > 1) {
+        backfillRef.current = page;
+      }
+      if (savedScroll != null && savedScroll > 0) {
+        pendingScrollRef.current = savedScroll;
+      }
+    }
+    setListReady(true);
+    // 只在进入页面时读一次 URL / 快照，翻页不能再次消费。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useLayoutEffect(() => {
+    if (pendingScrollRef.current == null || videos.length === 0) return;
+    if (backfillRef.current != null && page < backfillRef.current) return;
+    const top = pendingScrollRef.current;
+    pendingScrollRef.current = null;
+    writeDocumentScrollTop(top);
+    const rafId = window.requestAnimationFrame(() => writeDocumentScrollTop(top));
+    return () => window.cancelAnimationFrame(rafId);
+  }, [videos, page]);
+
+  useEffect(() => {
+    returnPayloadRef.current = {
+      sourceType,
+      embyKey,
+      selectedView,
+      openlistCategory,
+      sortBy,
+      sortOrder,
+      videos,
+      hasMore,
+      xiaoyaPath,
+    };
+  }, [
+    sourceType,
+    embyKey,
+    selectedView,
+    openlistCategory,
+    sortBy,
+    sortOrder,
+    videos,
+    hasMore,
+    xiaoyaPath,
+  ]);
+
+  const saveReturnState = useCallback(() => {
+    const payload = returnPayloadRef.current;
+    if (
+      !payload ||
+      (payload.videos.length === 0 &&
+        (!payload.xiaoyaPath || payload.xiaoyaPath === '/'))
+    ) {
+      return;
+    }
+    const scrollTop = readDocumentScrollTop();
+    saveListReturn(window.sessionStorage, PRIVATE_LIBRARY_RETURN_KEY, {
+      page,
+      scrollTop,
+      payload,
+    });
+    rememberListScroll(
+      window.sessionStorage,
+      window.location.pathname,
+      window.location.search,
+      scrollTop
+    );
+  }, [page]);
 
   useEffect(() => {
     if (mounted && !runtimeConfig.PRIVATE_LIBRARY_ENABLED) {
@@ -190,7 +332,7 @@ export default function PrivateLibraryPage() {
 
   // 更新URL参数
   useEffect(() => {
-    if (!isInitializedRef.current) return;
+    if (!isInitializedRef.current || !listReady) return;
 
     const params = new URLSearchParams();
 
@@ -205,12 +347,21 @@ export default function PrivateLibraryPage() {
       params.set('view', selectedView);
     }
 
-    router.replace(`/private-library?${params.toString()}`, { scroll: false });
-  }, [sourceType, embyKey, selectedView, router, embySourceOptions.length]);
+    const nextParams = assignListPage(params, page);
+    const nextQuery = nextParams.toString();
+    router.replace(
+      nextQuery ? `/private-library?${nextQuery}` : '/private-library',
+      { scroll: false }
+    );
+  }, [sourceType, embyKey, selectedView, page, router, embySourceOptions.length, listReady]);
 
   // 切换源类型时重置所有状态（但不在初始化时执行）
   useEffect(() => {
-    if (!isInitializedRef.current) return;
+    if (!listReady || !isInitializedRef.current) return;
+    if (skipSourceResetRef.current) {
+      skipSourceResetRef.current = false;
+      return;
+    }
 
     setPage(1);
     setVideos([]);
@@ -221,11 +372,15 @@ export default function PrivateLibraryPage() {
     setLoading(false);
     setLoadingMore(false);
     isFetchingRef.current = false;
-  }, [sourceType, embyKey]);
+  }, [listReady, sourceType, embyKey]);
 
   // 切换分类时重置状态（但不在初始化时执行）
   useEffect(() => {
-    if (!isInitializedRef.current) return;
+    if (!listReady || !isInitializedRef.current) return;
+    if (skipViewResetRef.current) {
+      skipViewResetRef.current = false;
+      return;
+    }
 
     setPage(1);
     setVideos([]);
@@ -234,12 +389,16 @@ export default function PrivateLibraryPage() {
     setLoading(false);
     setLoadingMore(false);
     isFetchingRef.current = false;
-  }, [selectedView]);
+  }, [listReady, selectedView]);
 
   // 切换 OpenList 分类时重置状态
   useEffect(() => {
-    if (!isInitializedRef.current) return;
+    if (!listReady || !isInitializedRef.current) return;
     if (sourceType !== 'openlist') return;
+    if (skipCategoryResetRef.current) {
+      skipCategoryResetRef.current = false;
+      return;
+    }
 
     setPage(1);
     setVideos([]);
@@ -248,12 +407,16 @@ export default function PrivateLibraryPage() {
     setLoading(false);
     setLoadingMore(false);
     isFetchingRef.current = false;
-  }, [openlistCategory, sourceType]);
+  }, [listReady, openlistCategory, sourceType]);
 
   // 切换排序时重置状态（但不在初始化时执行）
   useEffect(() => {
-    if (!isInitializedRef.current) return;
+    if (!listReady || !isInitializedRef.current) return;
     if (sourceType !== 'emby') return;
+    if (skipSortResetRef.current) {
+      skipSortResetRef.current = false;
+      return;
+    }
 
     setPage(1);
     setVideos([]);
@@ -262,7 +425,7 @@ export default function PrivateLibraryPage() {
     setLoading(false);
     setLoadingMore(false);
     isFetchingRef.current = false;
-  }, [sortBy, sortOrder, sourceType]);
+  }, [listReady, sortBy, sortOrder, sourceType]);
 
   // 获取 Emby 媒体库列表
   useEffect(() => {
@@ -434,7 +597,53 @@ export default function PrivateLibraryPage() {
 
   // 加载数据的函数
   useEffect(() => {
+    if (!listReady) return;
+    if (skipFetchRef.current) {
+      skipFetchRef.current = false;
+      return;
+    }
+
+    const buildEndpoint = (pageNumber: number) =>
+      sourceType === 'openlist'
+        ? `/api/openlist/list?page=${pageNumber}&pageSize=${pageSize}${
+            openlistCategory && openlistCategory !== 'all'
+              ? `&category=${encodeURIComponent(openlistCategory)}`
+              : ''
+          }`
+        : sourceType === 'xiaoya'
+        ? `/api/xiaoya/browse?path=${encodeURIComponent(xiaoyaPath)}`
+        : `/api/emby/list?page=${pageNumber}&pageSize=${pageSize}${selectedView !== 'all' ? `&parentId=${selectedView}` : ''}&embyKey=${embyKey}&sortBy=${sortBy}&sortOrder=${sortOrder}`;
+
     const fetchVideos = async () => {
+      const targetPage = backfillRef.current;
+      if (targetPage && targetPage > 1 && sourceType !== 'xiaoya') {
+        backfillRef.current = null;
+        setLoading(true);
+        setError('');
+        try {
+          const loaded = await loadPagesInOrder<Video>(targetPage, async (pageNumber) => {
+            const response = await fetch(buildEndpoint(pageNumber));
+            const data = await response.json();
+            const items = Array.isArray(data.list) ? data.list : [];
+            const current = Number(data.page || pageNumber);
+            const total = Number(data.totalPages || 1);
+            if (sourceType === 'openlist' && Array.isArray(data.categories)) {
+              setOpenlistCategories(data.categories);
+            }
+            return { items, hasMore: current < total };
+          });
+          setVideos(loaded.items);
+          setHasMore(loaded.hasMore);
+          if (loaded.page !== page) setPage(loaded.page);
+        } catch (err) {
+          console.error('获取视频列表失败:', err);
+          setError('获取视频列表失败');
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
+
       const isInitial = page === 1;
 
       // 取消之前的请求
@@ -473,17 +682,7 @@ export default function PrivateLibraryPage() {
         }
         setError('');
 
-        const endpoint = sourceType === 'openlist'
-          ? `/api/openlist/list?page=${page}&pageSize=${pageSize}${
-              openlistCategory && openlistCategory !== 'all'
-                ? `&category=${encodeURIComponent(openlistCategory)}`
-                : ''
-            }`
-          : sourceType === 'xiaoya'
-          ? `/api/xiaoya/browse?path=${encodeURIComponent(xiaoyaPath)}`
-          : `/api/emby/list?page=${page}&pageSize=${pageSize}${selectedView !== 'all' ? `&parentId=${selectedView}` : ''}&embyKey=${embyKey}&sortBy=${sortBy}&sortOrder=${sortOrder}`;
-
-        const response = await fetch(endpoint, { signal: abortController.signal });
+        const response = await fetch(buildEndpoint(page), { signal: abortController.signal });
 
         if (!response.ok) {
           throw new Error('获取视频列表失败');
@@ -554,7 +753,7 @@ export default function PrivateLibraryPage() {
         abortControllerRef.current.abort();
       }
     };
-  }, [sourceType, embyKey, page, selectedView, xiaoyaPath, runtimeConfig, sortBy, sortOrder, openlistCategory]);
+  }, [listReady, sourceType, embyKey, page, selectedView, xiaoyaPath, runtimeConfig, sortBy, sortOrder, openlistCategory]);
 
   const handleVideoClick = (video: Video) => {
     // 构建source参数
@@ -1099,6 +1298,7 @@ export default function PrivateLibraryPage() {
                       <button
                         key={file.path}
                         onClick={() => {
+                          saveReturnState();
                           // ID使用目录路径，额外传递文件名（不需要编码）
                           const encodedDirPath = base58Encode(xiaoyaPath);
                           router.push(`/play?source=xiaoya&id=${encodeURIComponent(encodedDirPath)}&fileName=${encodeURIComponent(file.name)}&title=${encodeURIComponent(title)}`);
@@ -1159,6 +1359,7 @@ export default function PrivateLibraryPage() {
                         : ''
                     }
                     from='search'
+                    onBeforeNavigate={saveReturnState}
                   />
                 );
               })}

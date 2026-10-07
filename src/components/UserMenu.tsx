@@ -34,17 +34,18 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { clearAllDanmakuCache, getDanmakuCacheStats } from '@/lib/danmaku/api';
 import { SAVE_LIVE_PLAY_RECORDS_KEY } from '@/lib/db.client';
+import { takeFavoritesReturn } from '@/lib/list-return-state';
 import {
+  type LocalSettingsPayload,
   LOCAL_SETTINGS_KEYS,
   LOCAL_SETTINGS_SYNC_LAST_PULL_KEY,
-  type LocalSettingsPayload,
 } from '@/lib/local-settings-sync';
 import { clearBangumiImageFallbackCache } from '@/lib/utils';
 import { CURRENT_VERSION } from '@/lib/version';
@@ -69,6 +70,10 @@ interface AuthInfo {
 
 export const UserMenu: React.FC = () => {
   const router = useRouter();
+  const pathname = usePathname();
+  const [favoritesReturnScroll, setFavoritesReturnScroll] = useState<
+    number | null
+  >(null);
   const { updateStatus, isChecking } = useVersionCheck();
   const [isOpen, setIsOpen] = useState(false);
   const [isProfileCenterOpen, setIsProfileCenterOpen] = useState(false);
@@ -80,6 +85,13 @@ export const UserMenu: React.FC = () => {
     useState(false);
   const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
   const [isFavoritesPanelOpen, setIsFavoritesPanelOpen] = useState(false);
+
+  useLayoutEffect(() => {
+    const scrollTop = takeFavoritesReturn(window.sessionStorage, pathname);
+    if (scrollTop == null) return;
+    setFavoritesReturnScroll(scrollTop);
+    setIsFavoritesPanelOpen(true);
+  }, [pathname]);
   const [isEmailSettingsOpen, setIsEmailSettingsOpen] = useState(false);
   const [isDeviceManagementOpen, setIsDeviceManagementOpen] = useState(false);
   const [isEcoAppsOpen, setIsEcoAppsOpen] = useState(false);
@@ -6225,7 +6237,11 @@ export const UserMenu: React.FC = () => {
         createPortal(
           <FavoritesPanel
             isOpen={isFavoritesPanelOpen}
-            onClose={() => setIsFavoritesPanelOpen(false)}
+            initialScrollTop={favoritesReturnScroll}
+            onClose={() => {
+              setIsFavoritesPanelOpen(false);
+              setFavoritesReturnScroll(null);
+            }}
           />,
           document.body
         )}

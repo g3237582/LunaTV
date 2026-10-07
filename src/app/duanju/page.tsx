@@ -19,7 +19,14 @@ import {
   isHierarchicalCategories,
   pickDefaultSelection,
 } from '@/lib/category-tree';
+import {
+  loadPagesInOrder,
+  readListPage,
+  rememberListScroll,
+  takeListScroll,
+} from '@/lib/list-return-state';
 import { SearchResult } from '@/lib/types';
+import { useSyncListPage } from '@/hooks/useSyncListPage';
 
 import CapsuleSwitch from '@/components/CapsuleSwitch';
 import PageLayout from '@/components/PageLayout';
@@ -105,6 +112,9 @@ function DuanjuPageClient() {
   // 恢复时需要跳过一次「拉取分类」和「拉取列表」
   const skipCategoryFetchRef = useRef(false);
   const skipVideoFetchRef = useRef(false);
+  const backfillToRef = useRef<number | null>(null);
+
+  useSyncListPage(currentPage, restoreChecked);
   const isDraggingRef = useRef(false);
   const startXRef = useRef(0);
   const scrollLeftRef = useRef(0);
@@ -130,6 +140,29 @@ function DuanjuPageClient() {
       setVideos(snapshot.videos);
       setCurrentPage(snapshot.currentPage);
       setHasMore(snapshot.hasMore);
+      if (typeof window !== 'undefined') {
+        takeListScroll(
+          window.sessionStorage,
+          window.location.pathname,
+          window.location.search
+        );
+      }
+    } else if (typeof window !== 'undefined') {
+      const urlPage = readListPage(
+        new URLSearchParams(window.location.search).get('page')
+      );
+      const savedScroll = takeListScroll(
+        window.sessionStorage,
+        window.location.pathname,
+        window.location.search
+      );
+      if (savedScroll != null && savedScroll > 0) {
+        pendingScrollTopRef.current = savedScroll;
+      }
+      if (urlPage > 1) {
+        backfillToRef.current = urlPage;
+        setCurrentPage(urlPage);
+      }
     }
     setRestoreChecked(true);
   }, []);
@@ -176,9 +209,16 @@ function DuanjuPageClient() {
     const snapshot = snapshotRef.current;
     if (!snapshot || snapshot.videos.length === 0) return;
     try {
+      const scrollTop = getPageScrollTop();
       sessionStorage.setItem(
         DUANJU_STATE_KEY,
-        JSON.stringify({ ...snapshot, scrollTop: getPageScrollTop() })
+        JSON.stringify({ ...snapshot, scrollTop })
+      );
+      rememberListScroll(
+        sessionStorage,
+        window.location.pathname,
+        window.location.search,
+        scrollTop
       );
     } catch {
       // 忽略 sessionStorage 写入失败（如超出配额）
@@ -348,6 +388,26 @@ function DuanjuPageClient() {
     const fetchVideos = async () => {
       setIsLoadingVideos(true);
       try {
+        const targetPage = backfillToRef.current;
+        if (targetPage && targetPage > 1) {
+          backfillToRef.current = null;
+          const loaded = await loadPagesInOrder<SearchResult>(targetPage, async (page) => {
+            const response = await fetch(
+              `/api/duanju/videos?source=${encodeURIComponent(selectedSource)}&categoryId=${encodeURIComponent(selectedCategory)}&page=${page}`
+            );
+            const data = await response.json();
+            const results = Array.isArray(data.data) ? data.data : [];
+            return {
+              items: results,
+              hasMore:
+                data.code === 200 && Number(data.page) < Number(data.pageCount),
+            };
+          });
+          setVideos(loaded.items);
+          setHasMore(loaded.hasMore);
+          if (loaded.page !== currentPage) setCurrentPage(loaded.page);
+          return;
+        }
         const response = await fetch(
           `/api/duanju/videos?source=${encodeURIComponent(selectedSource)}&categoryId=${encodeURIComponent(selectedCategory)}&page=${currentPage}`
         );
