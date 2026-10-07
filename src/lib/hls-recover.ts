@@ -54,6 +54,63 @@ export function rememberHlsPlayhead(previous: number, current: number): number {
   return current;
 }
 
+export type TrackedPlayhead = {
+  playhead: number;
+  pendingUserSeek: number | null;
+};
+
+/**
+ * 把一次媒体时间采样并进恢复用播放头。
+ *
+ * 没有用户拖动时播放头只前进：remount 会把 currentTime 打成 0.x，
+ * 坏切口跳过之后卡住的旧时间也不能把跳过目标拉回去。
+ *
+ * 进度条点击/拖动和方向键会留下 pendingUserSeek。这个目标允许小于当前播放头。
+ * 若这里继续单调取最大，随后的 canplay 会按最远观看点把时间拉回去，
+ * 进度条就只能往前拖。
+ */
+export function resolveTrackedPlayhead(input: {
+  tracked: number;
+  observed: number;
+  pendingUserSeek: number | null;
+  /**
+   * 仅用于 video seeking。进度条把 currentTime 设到更早的位置时，这次 seeking
+   * 的 currentTime 就是用户目标，必须立刻采纳。timeupdate 不能开这个口子，
+   * 否则坏切口上卡住的旧时间会把跳过目标拉回去。
+   */
+  adoptBackwardSeek?: boolean;
+}): TrackedPlayhead {
+  const tracked = Number.isFinite(input.tracked) ? input.tracked : 0;
+  let pendingUserSeek = input.pendingUserSeek;
+  const observed = Number(input.observed);
+
+  if (
+    pendingUserSeek == null &&
+    input.adoptBackwardSeek &&
+    Number.isFinite(observed) &&
+    observed >= 1 &&
+    observed + 0.25 < tracked
+  ) {
+    pendingUserSeek = observed;
+  }
+
+  const pending = Number(pendingUserSeek);
+  if (pendingUserSeek != null && Number.isFinite(pending) && pending >= 0) {
+    const landed =
+      Number.isFinite(observed) && Math.abs(observed - pending) <= 1.5;
+    return {
+      playhead: pending,
+      pendingUserSeek: landed ? null : pending,
+    };
+  }
+
+  const next = rememberHlsPlayhead(tracked, input.observed);
+  return {
+    playhead: Math.max(tracked, next),
+    pendingUserSeek: null,
+  };
+}
+
 export function playheadBucket(time: number): number {
   if (!Number.isFinite(time) || time < 1) {
     return 0;

@@ -39,9 +39,9 @@ import {
   markHlsRecovered,
   readFailedHlsPlayhead,
   rememberFailedHlsPlayhead,
-  rememberHlsPlayhead,
   rememberHlsRecoverState,
   resolveSafeResumeTime,
+  resolveTrackedPlayhead,
   writeFailedHlsPlayhead,
 } from '@/lib/hls-recover';
 import { resolveHlsStartPosition } from '@/lib/hls-start-position';
@@ -2457,6 +2457,14 @@ function PlayPageClient() {
   // 播放头必须带集数：切集后旧集的时间不能再被当成新集的续播位置。
   const hlsPlayheadRef = useRef(0);
   const hlsPlayheadEpisodeRef = useRef<number | null>(null);
+  // 进度条点击/拖动、方向键的目标时间。canplay 续播不能把它拉回最远观看点。
+  const pendingUserSeekRef = useRef<number | null>(null);
+  const noteUserSeek = (time: number) => {
+    if (!Number.isFinite(time) || time < 0) return;
+    pendingUserSeekRef.current = time;
+    hlsPlayheadRef.current = time;
+    hlsPlayheadEpisodeRef.current = currentEpisodeIndexRef.current;
+  };
   const hlsFailedPlayheadRef = useRef(0);
   const hlsFailedPlayheadEpisodeRef = useRef<number | null>(null);
   // 播放器实际在播的集。和当前选集不一致时不能把进度写进新集。
@@ -4357,6 +4365,7 @@ function PlayPageClient() {
     if (episodeChanged) {
       hlsPlayheadRef.current = 0;
       hlsPlayheadEpisodeRef.current = null;
+      pendingUserSeekRef.current = null;
       hlsRecoverStateRef.current = createHlsRecoverState();
       playbackEpisodeRef.current = null;
       lastSavedPlayTimeRef.current = null;
@@ -6180,9 +6189,11 @@ function PlayPageClient() {
             resumeTimeRef.current = currentPlayTime;
             hlsPlayheadRef.current = currentPlayTime;
             hlsPlayheadEpisodeRef.current = targetEpisode;
+            pendingUserSeekRef.current = null;
           } else {
             hlsPlayheadRef.current = 0;
             hlsPlayheadEpisodeRef.current = null;
+            pendingUserSeekRef.current = null;
             playbackEpisodeRef.current = null;
             lastSavedPlayTimeRef.current = null;
             const failedPlayhead = readFailedHlsPlayhead(
@@ -6388,12 +6399,14 @@ function PlayPageClient() {
           );
       if (isSameEpisodeSwitch) {
         hlsPlayheadEpisodeRef.current = targetIndex;
+        pendingUserSeekRef.current = null;
         if (Number(resumeTime) > 1) {
           hlsPlayheadRef.current = Number(resumeTime);
         }
       } else {
         hlsPlayheadRef.current = 0;
         hlsPlayheadEpisodeRef.current = null;
+        pendingUserSeekRef.current = null;
         hlsRecoverStateRef.current = createHlsRecoverState();
         playbackEpisodeRef.current = null;
         lastSavedPlayTimeRef.current = null;
@@ -6545,6 +6558,7 @@ function PlayPageClient() {
     // 同时丢掉上一集的会话播放头，避免 canplay 把它套到新集上。
     hlsPlayheadRef.current = 0;
     hlsPlayheadEpisodeRef.current = null;
+    pendingUserSeekRef.current = null;
     hlsRecoverStateRef.current = createHlsRecoverState();
     lastSavedPlayTimeRef.current = null;
     playbackEpisodeRef.current = null;
@@ -7337,12 +7351,14 @@ function PlayPageClient() {
     // 左箭头 = 按「快进/倒退时间」快退
     if (!e.altKey && e.key === 'ArrowLeft') {
       if (artPlayerRef.current) {
-        artPlayerRef.current.currentTime = calculateSeekTime(
+        const nextTime = calculateSeekTime(
           artPlayerRef.current.currentTime,
           artPlayerRef.current.duration,
           -1,
           seekStepSecondsRef.current
         );
+        noteUserSeek(nextTime);
+        artPlayerRef.current.currentTime = nextTime;
         artPlayerRef.current.notice.show = `快退 ${formatQuickForwardDuration(
           seekStepSecondsRef.current
         )}`;
@@ -7353,12 +7369,14 @@ function PlayPageClient() {
     // 右箭头 = 按「快进/倒退时间」快进
     if (!e.altKey && e.key === 'ArrowRight') {
       if (artPlayerRef.current) {
-        artPlayerRef.current.currentTime = calculateSeekTime(
+        const nextTime = calculateSeekTime(
           artPlayerRef.current.currentTime,
           artPlayerRef.current.duration,
           1,
           seekStepSecondsRef.current
         );
+        noteUserSeek(nextTime);
+        artPlayerRef.current.currentTime = nextTime;
         artPlayerRef.current.notice.show = `快进 ${formatQuickForwardDuration(
           seekStepSecondsRef.current
         )}`;
@@ -8167,18 +8185,20 @@ function PlayPageClient() {
               const boundEpisode = currentEpisodeIndexRef.current;
               const playheadStillCurrent = () =>
                 currentEpisodeIndexRef.current === boundEpisode;
-              const rememberHlsMediaTime = () => {
+              const rememberHlsMediaTime = (event?: Event) => {
                 if (!playheadStillCurrent()) {
                   return;
                 }
-                lastHlsMediaTime = rememberHlsPlayhead(
-                  Math.max(lastHlsMediaTime, hlsPlayheadRef.current),
-                  video.currentTime
-                );
-                hlsPlayheadRef.current = Math.max(
-                  hlsPlayheadRef.current,
-                  lastHlsMediaTime
-                );
+                // seeking 上的回退是进度条/方向键目标；timeupdate 仍只前进，保护坏切口跳过。
+                const tracked = resolveTrackedPlayhead({
+                  tracked: Math.max(lastHlsMediaTime, hlsPlayheadRef.current),
+                  observed: video.currentTime,
+                  pendingUserSeek: pendingUserSeekRef.current,
+                  adoptBackwardSeek: event?.type === 'seeking',
+                });
+                lastHlsMediaTime = tracked.playhead;
+                hlsPlayheadRef.current = tracked.playhead;
+                pendingUserSeekRef.current = tracked.pendingUserSeek;
                 hlsPlayheadEpisodeRef.current = boundEpisode;
               };
               video.addEventListener('timeupdate', rememberHlsMediaTime);
@@ -9482,6 +9502,18 @@ function PlayPageClient() {
           clearPlayerTimeouts();
         });
 
+        // 进度条点击/拖动（桌面鼠标和移动端触摸）都走 ArtPlayer 的 seek。
+        // 必须在 canplay 把时间拉回最远播放头之前记下用户目标，往回拖才留得住。
+        artPlayerRef.current.on('seek', (currentTime: number) => {
+          const duration = Number(artPlayerRef.current?.duration) || 0;
+          const target = Number(currentTime);
+          // 时长未知时 ArtPlayer 会把任何 seek 夹成 0，这不是用户拖回开头。
+          if (!(duration >= 1) && !(target >= 1)) {
+            return;
+          }
+          noteUserSeek(target);
+        });
+
         artPlayerRef.current.on('flip', syncAnime4KCanvasFlip);
 
         // 监听播放器事件
@@ -10327,12 +10359,14 @@ function PlayPageClient() {
             // 按「快进/倒退时间」配置快退
             backwardBtn.onclick = () => {
               if (artPlayerRef.current) {
-                artPlayerRef.current.currentTime = calculateSeekTime(
+                const nextTime = calculateSeekTime(
                   artPlayerRef.current.currentTime,
                   artPlayerRef.current.duration,
                   -1,
                   seekStepSecondsRef.current
                 );
+                noteUserSeek(nextTime);
+                artPlayerRef.current.currentTime = nextTime;
                 artPlayerRef.current.notice.show = `快退 ${formatQuickForwardDuration(
                   seekStepSecondsRef.current
                 )}`;
@@ -10342,12 +10376,14 @@ function PlayPageClient() {
             // 按「快进/倒退时间」配置快进
             forwardBtn.onclick = () => {
               if (artPlayerRef.current) {
-                artPlayerRef.current.currentTime = calculateSeekTime(
+                const nextTime = calculateSeekTime(
                   artPlayerRef.current.currentTime,
                   artPlayerRef.current.duration,
                   1,
                   seekStepSecondsRef.current
                 );
+                noteUserSeek(nextTime);
+                artPlayerRef.current.currentTime = nextTime;
                 artPlayerRef.current.notice.show = `快进 ${formatQuickForwardDuration(
                   seekStepSecondsRef.current
                 )}`;
@@ -10400,9 +10436,15 @@ function PlayPageClient() {
           });
           let restoredResumeTime = false;
           const target = resumeDecision.action === 'seek' ? resumeDecision.time : 0;
+          const pendingUserSeek = pendingUserSeekRef.current;
+          // 用户正在把进度条往回拖。canplay（缓冲完成后会再来一次）不能拉回最远观看点。
+          const scrubbingBackward =
+            pendingUserSeek != null &&
+            resumeDecision.action === 'seek' &&
+            resumeDecision.time > pendingUserSeek + 1;
 
           // 上一集的播放头不会进到这里。新集要么从 0 开始，要么跳到这一集自己的进度。
-          if (resumeDecision.action === 'seek') {
+          if (resumeDecision.action === 'seek' && !scrubbingBackward) {
             try {
               artPlayerRef.current.currentTime = target;
               hlsPlayheadRef.current = target;
@@ -10469,7 +10511,7 @@ function PlayPageClient() {
             } catch (err) {
               console.warn('恢复播放进度失败:', err);
             }
-          } else {
+          } else if (!scrubbingBackward) {
             // 不能把上一集尚未清掉的播放头标成这一集，否则下一次 canplay 会再次跳到片尾。
             if (hlsPlayheadEpisodeRef.current !== selectedEpisode) {
               hlsPlayheadRef.current = 0;

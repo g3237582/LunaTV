@@ -57,6 +57,32 @@ describe('resolveEpisodeResumeAction', () => {
     ).toEqual({ action: 'seek', time: 234.18 });
   });
 
+  it('pulls a backward scrub forward while the live playhead is still the furthest point', () => {
+    expect(
+      resolveEpisodeResumeAction({
+        targetEpisode: 0,
+        episodeProgress: null,
+        livePlayhead: 100,
+        livePlayheadEpisode: 0,
+        currentTime: 40,
+        duration: 2400,
+      })
+    ).toEqual({ action: 'seek', time: 100 });
+  });
+
+  it('keeps a backward scrub once the live playhead follows the progress bar', () => {
+    expect(
+      resolveEpisodeResumeAction({
+        targetEpisode: 0,
+        episodeProgress: null,
+        livePlayhead: 40,
+        livePlayheadEpisode: 0,
+        currentTime: 40,
+        duration: 2400,
+      })
+    ).toEqual({ action: 'keep' });
+  });
+
   it('does not seek again when playback is already at the same-episode playhead', () => {
     expect(
       resolveEpisodeResumeAction({
