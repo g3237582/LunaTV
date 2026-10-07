@@ -14,10 +14,12 @@ import {
   X,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import React, {
   startTransition,
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -34,6 +36,15 @@ import {
   getSearchHistory,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import {
+  hrefWithListPage,
+  listPageAfterFilterChange,
+  readDocumentScrollTop,
+  readListPage,
+  rememberListScroll,
+  takeListScroll,
+  writeDocumentScrollTop,
+} from '@/lib/list-return-state';
 import {
   clampSearchPage,
   searchListPageCount,
@@ -121,8 +132,12 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   const [converterReady, setConverterReady] = useState(false);
 
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const submittedSearchQuery = searchParams.get('q')?.trim() || '';
+  const searchTypeParam = searchParams.get('type');
+  // 页码以地址栏为准。进入 /play 后组件会卸载，返回时靠 ?page= 回到原页。
+  const currentPage = readListPage(searchParams.get('page'));
   const currentQueryRef = useRef<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -316,7 +331,6 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   const [viewMode, setViewMode] = useState<'agg' | 'all'>(() => {
     return getDefaultAggregate() ? 'agg' : 'all';
   });
-  const [currentPage, setCurrentPage] = useState(1);
   const [resultDisplayMode, setResultDisplayMode] = useState<'card' | 'list'>(
     () => {
       if (typeof window !== 'undefined') {
@@ -744,12 +758,11 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   const pagedAllResults =
     viewMode === 'all' ? searchListPageOf(filteredAllResults, safePage) : [];
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [
+  const filterSignature = [
     submittedSearchQuery,
     viewMode,
-    exactSearch,
+    String(exactSearch),
+    String(privateLibraryOnly),
     filterAll.source,
     filterAll.title,
     filterAll.year,
@@ -758,14 +771,69 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     filterAgg.title,
     filterAgg.year,
     filterAgg.yearOrder,
+  ].join('|');
+  const filterSignatureRef = useRef<string | null>(null);
+
+  // 筛选第一次就绪时保留 URL 里的页码；只有用户改了筛选才回到第 1 页。
+  useEffect(() => {
+    if (!privateLibraryOnlyReady) return;
+    const decision = listPageAfterFilterChange(
+      currentPage,
+      filterSignatureRef.current,
+      filterSignature
+    );
+    filterSignatureRef.current = decision.signature;
+    if (!decision.changed || decision.page === currentPage) return;
+    router.replace(
+      hrefWithListPage(`${pathname}?${searchParams.toString()}`, decision.page),
+      { scroll: false }
+    );
+  }, [
+    privateLibraryOnlyReady,
+    filterSignature,
+    currentPage,
+    pathname,
+    router,
+    searchParams,
   ]);
+
+  const saveReturnPosition = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    rememberListScroll(
+      window.sessionStorage,
+      window.location.pathname,
+      window.location.search,
+      readDocumentScrollTop()
+    );
+  }, []);
+
+  const restoredScrollRef = useRef(false);
+  useLayoutEffect(() => {
+    if (restoredScrollRef.current || isLoading || searchResults.length === 0) {
+      return;
+    }
+    if (typeof window === 'undefined') return;
+    restoredScrollRef.current = true;
+    const top = takeListScroll(
+      window.sessionStorage,
+      window.location.pathname,
+      window.location.search
+    );
+    if (top == null || top <= 0) return;
+    writeDocumentScrollTop(top);
+    const rafId = window.requestAnimationFrame(() => writeDocumentScrollTop(top));
+    return () => window.cancelAnimationFrame(rafId);
+  }, [isLoading, searchResults.length, currentPage]);
 
   const goToPage = (page: number) => {
     const next = clampSearchPage(page, pageCount);
     if (next === currentPage) {
       return;
     }
-    setCurrentPage(next);
+    router.replace(
+      hrefWithListPage(`${pathname}?${searchParams.toString()}`, next),
+      { scroll: false }
+    );
     try {
       document.body.scrollTo({ top: 0, behavior: 'smooth' });
     } catch {
@@ -936,6 +1004,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
         type='button'
         onClick={() => {
           savePartialCacheForPlayback();
+          saveReturnPosition();
           router.push(itemUrl);
         }}
         className='group w-full rounded-2xl border border-gray-200/80 bg-white/90 p-3 text-left shadow-sm transition-all hover:border-green-300 hover:shadow-md dark:border-gray-700 dark:bg-gray-900/70 dark:hover:border-green-700'
@@ -1188,10 +1257,12 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
       document.getElementById('searchInput')?.focus();
     }
   }, [
-    searchParams,
+    submittedSearchQuery,
+    searchTypeParam,
     netdiskSearchEnabled,
     magnetSearchEnabled,
     featureFlagsReady,
+    isSpecialEntry,
   ]);
 
   useEffect(() => {
@@ -1218,13 +1289,10 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
           if (originalQuery !== query) {
             const trimmedConverted = query.trim();
             // 使用 replace 而不是 push，避免在历史记录中留下繁体版本
-            router.replace(
-              `${searchBase}?q=${encodeURIComponent(trimmedConverted)}${
-                searchParams.get('type')
-                  ? `&type=${searchParams.get('type')}`
-                  : ''
-              }`
-            );
+            const nextParams = new URLSearchParams(searchParams.toString());
+            nextParams.set('q', trimmedConverted);
+            const nextQuery = nextParams.toString();
+            router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
             return; // 等待 URL 更新后重新触发此 effect
           }
         } catch (error) {
@@ -1487,7 +1555,8 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
       setShowSuggestions(false);
     }
   }, [
-    searchParams,
+    submittedSearchQuery,
+    searchTypeParam,
     forceRefresh,
     converterReady,
     privateLibraryOnlyReady,
@@ -1515,7 +1584,8 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
       }, 100);
     }
   }, [
-    searchParams,
+    submittedSearchQuery,
+    searchTypeParam,
     netdiskSearchEnabled,
     magnetSearchEnabled,
     featureFlagsReady,
@@ -2321,9 +2391,10 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                                   <VideoCard
                                     ref={getGroupRef(mapKey)}
                                     from='search'
-                                    onBeforeNavigate={
-                                      savePartialCacheForPlayback
-                                    }
+                                    onBeforeNavigate={() => {
+                                      savePartialCacheForPlayback();
+                                      saveReturnPosition();
+                                    }}
                                     isAggregate={true}
                                     title={title}
                                     poster={poster}
@@ -2385,9 +2456,10 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                                 >
                                   <VideoCard
                                     id={item.id}
-                                    onBeforeNavigate={
-                                      savePartialCacheForPlayback
-                                    }
+                                    onBeforeNavigate={() => {
+                                      savePartialCacheForPlayback();
+                                      saveReturnPosition();
+                                    }}
                                     title={item.title}
                                     poster={item.poster}
                                     episodes={item.episodes.length}

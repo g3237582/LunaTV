@@ -4,7 +4,7 @@
 
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { GetBangumiCalendarData } from '@/lib/bangumi.client';
 import {
@@ -12,7 +12,19 @@ import {
   getDoubanList,
   getDoubanRecommends,
 } from '@/lib/douban.client';
+import {
+  consumeListReturn,
+  doubanLoadedIndex,
+  doubanUrlPage,
+  readDocumentScrollTop,
+  readListPage,
+  rememberListScroll,
+  saveListReturn,
+  takeListScroll,
+  writeDocumentScrollTop,
+} from '@/lib/list-return-state';
 import { DoubanItem, DoubanResult } from '@/lib/types';
+import { useSyncListPage } from '@/hooks/useSyncListPage';
 
 import BangumiScheduleTimeline from '@/components/BangumiScheduleTimeline';
 import DoubanCardSkeleton from '@/components/DoubanCardSkeleton';
@@ -20,6 +32,30 @@ import DoubanCustomSelector from '@/components/DoubanCustomSelector';
 import DoubanSelector from '@/components/DoubanSelector';
 import PageLayout from '@/components/PageLayout';
 import VideoCard from '@/components/VideoCard';
+
+const DOUBAN_RETURN_KEY = 'list-return:douban';
+
+interface DoubanReturnPayload {
+  type: string;
+  primarySelection: string;
+  secondarySelection: string;
+  multiLevelValues: Record<string, string>;
+  selectedWeekday: string;
+  viewMode: 'grid' | 'schedule';
+  doubanData: DoubanItem[];
+  hasMore: boolean;
+  loadedIndex: number;
+}
+
+function doubanFilterSignature(value: {
+  type: string;
+  primarySelection: string;
+  secondarySelection: string;
+  multiLevelValues: Record<string, string>;
+  selectedWeekday: string;
+}): string {
+  return JSON.stringify(value);
+}
 
 function DoubanPageClient() {
   const searchParams = useSearchParams();
@@ -94,6 +130,126 @@ function DoubanPageClient() {
 
   // 每日放送视图模式：grid(卡片) / schedule(时刻表)
   const [viewMode, setViewMode] = useState<'grid' | 'schedule'>('grid');
+  const [restoreChecked, setRestoreChecked] = useState(false);
+  const [heldUrlPage, setHeldUrlPage] = useState<number | null>(null);
+  const holdSignatureRef = useRef<string | null>(null);
+  const pendingUrlPageRef = useRef<number | null>(null);
+  const pendingScrollRef = useRef<number | null>(null);
+  const returnPayloadRef = useRef<DoubanReturnPayload | null>(null);
+
+  useSyncListPage(
+    heldUrlPage ?? doubanUrlPage(currentPage),
+    restoreChecked
+  );
+
+  // 从播放页返回时，先恢复已加载的列表，避免选择器重置把页码打回第一页。
+  useLayoutEffect(() => {
+    const saved = consumeListReturn<DoubanReturnPayload>(
+      window.sessionStorage,
+      DOUBAN_RETURN_KEY
+    );
+    const urlPage = readListPage(
+      new URLSearchParams(window.location.search).get('page')
+    );
+    const savedScroll = takeListScroll(
+      window.sessionStorage,
+      window.location.pathname,
+      window.location.search
+    );
+    if (
+      saved &&
+      saved.payload.type === type &&
+      saved.payload.doubanData.length > 0
+    ) {
+      const payload = saved.payload;
+      holdSignatureRef.current = doubanFilterSignature({
+        type: payload.type,
+        primarySelection: payload.primarySelection,
+        secondarySelection: payload.secondarySelection,
+        multiLevelValues: payload.multiLevelValues,
+        selectedWeekday: payload.selectedWeekday,
+      });
+      setPrimarySelection(payload.primarySelection);
+      setSecondarySelection(payload.secondarySelection);
+      setMultiLevelValues(payload.multiLevelValues);
+      setSelectedWeekday(payload.selectedWeekday);
+      setViewMode(payload.viewMode);
+      setDoubanData(payload.doubanData);
+      setCurrentPage(payload.loadedIndex);
+      setHasMore(payload.hasMore);
+      setLoading(false);
+      setSelectorsReady(true);
+      pendingScrollRef.current =
+        saved.scrollTop > 0 ? saved.scrollTop : savedScroll;
+    } else {
+      if (urlPage > 1) {
+        pendingUrlPageRef.current = urlPage;
+        setHeldUrlPage(urlPage);
+      }
+      if (savedScroll != null && savedScroll > 0) {
+        pendingScrollRef.current = savedScroll;
+      }
+    }
+    setRestoreChecked(true);
+    // 只在进入页面时恢复一次。type 后续变化走选择器重置。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useLayoutEffect(() => {
+    if (pendingScrollRef.current == null || doubanData.length === 0) return;
+    if (
+      pendingUrlPageRef.current != null &&
+      currentPage < doubanLoadedIndex(pendingUrlPageRef.current)
+    ) {
+      return;
+    }
+    const top = pendingScrollRef.current;
+    pendingScrollRef.current = null;
+    writeDocumentScrollTop(top);
+    const rafId = window.requestAnimationFrame(() => writeDocumentScrollTop(top));
+    return () => window.cancelAnimationFrame(rafId);
+  }, [doubanData, currentPage]);
+
+  useEffect(() => {
+    returnPayloadRef.current = {
+      type,
+      primarySelection,
+      secondarySelection,
+      multiLevelValues,
+      selectedWeekday,
+      viewMode,
+      doubanData,
+      hasMore,
+      loadedIndex: currentPage,
+    };
+  }, [
+    type,
+    primarySelection,
+    secondarySelection,
+    multiLevelValues,
+    selectedWeekday,
+    viewMode,
+    doubanData,
+    hasMore,
+    currentPage,
+  ]);
+
+  const saveReturnState = useCallback(() => {
+    const payload = returnPayloadRef.current;
+    if (!payload || payload.doubanData.length === 0) return;
+    const scrollTop = readDocumentScrollTop();
+    saveListReturn(window.sessionStorage, DOUBAN_RETURN_KEY, {
+      page: doubanUrlPage(payload.loadedIndex),
+      scrollTop,
+      payload,
+    });
+    rememberListScroll(
+      window.sessionStorage,
+      window.location.pathname,
+      window.location.search,
+      scrollTop
+    );
+  }, []);
 
   // 获取自定义分类数据
   useEffect(() => {
@@ -134,12 +290,28 @@ function DoubanPageClient() {
 
   // type变化时立即重置selectorsReady（最高优先级）
   useEffect(() => {
+    if (holdSignatureRef.current) return;
     setSelectorsReady(false);
     setLoading(true); // 立即显示loading状态
   }, [type]);
 
   // 当type变化时重置选择器状态
   useEffect(() => {
+    if (holdSignatureRef.current) {
+      const signature = doubanFilterSignature({
+        type,
+        primarySelection,
+        secondarySelection,
+        multiLevelValues,
+        selectedWeekday,
+      });
+      if (signature === holdSignatureRef.current) {
+        setSelectorsReady(true);
+        setLoading(false);
+        return;
+      }
+      holdSignatureRef.current = null;
+    }
     if (type === 'custom' && customCategories.length > 0) {
       // 自定义分类模式：优先选择 movie，如果没有 movie 则选择 tv
       const types = Array.from(
@@ -416,6 +588,20 @@ function DoubanPageClient() {
       return;
     }
 
+    if (holdSignatureRef.current) {
+      const signature = doubanFilterSignature({
+        type,
+        primarySelection,
+        secondarySelection,
+        multiLevelValues,
+        selectedWeekday,
+      });
+      if (signature === holdSignatureRef.current) {
+        return;
+      }
+      holdSignatureRef.current = null;
+    }
+
     // 清除之前的防抖定时器
     if (debounceTimeoutRef.current) {
       clearTimeout(debounceTimeoutRef.current);
@@ -570,6 +756,27 @@ function DoubanPageClient() {
     customCategories,
     multiLevelValues,
     selectedWeekday,
+  ]);
+
+  // 地址栏记录了已加载页数、但没有快照时，从第一页补到那一页。
+  useEffect(() => {
+    const target = pendingUrlPageRef.current;
+    if (!target || !restoreChecked || !selectorsReady) return;
+    if (loading || isLoadingMore || doubanData.length === 0) return;
+    const targetIndex = doubanLoadedIndex(target);
+    if (currentPage < targetIndex) {
+      setCurrentPage((prev) => prev + 1);
+      return;
+    }
+    pendingUrlPageRef.current = null;
+    setHeldUrlPage(null);
+  }, [
+    restoreChecked,
+    selectorsReady,
+    loading,
+    isLoadingMore,
+    doubanData.length,
+    currentPage,
   ]);
 
   // 设置滚动监听
@@ -839,6 +1046,7 @@ function DoubanPageClient() {
                     <div key={`${item.title}-${index}`} className='w-full'>
                       <VideoCard
                         from='douban'
+                        onBeforeNavigate={saveReturnState}
                         title={item.title}
                         poster={item.poster}
                         douban_id={Number(item.id)}

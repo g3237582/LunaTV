@@ -21,8 +21,15 @@ import {
   pickDefaultSelection,
 } from '@/lib/category-tree';
 import { ApiSite } from '@/lib/config';
+import {
+  loadPagesInOrder,
+  readListPage,
+  rememberListScroll,
+  takeListScroll,
+} from '@/lib/list-return-state';
 import { appendSpecialSourceParam } from '@/lib/special-source.client';
 import { SearchResult } from '@/lib/types';
+import { useSyncListPage } from '@/hooks/useSyncListPage';
 
 import CapsuleSwitch from '@/components/CapsuleSwitch';
 import PageLayout from '@/components/PageLayout';
@@ -117,6 +124,10 @@ function SourceSearchPageClient() {
   // 恢复时需要跳过一次「拉取分类」和「拉取列表」
   const skipCategoryFetchRef = useRef(false);
   const skipVideoFetchRef = useRef(false);
+  // URL 里的页码没有快照时，要按顺序补齐第 1 页到该页，不能只请求最后一页。
+  const backfillToRef = useRef<number | null>(null);
+
+  useSyncListPage(currentPage, restoreChecked);
 
   // 读取观影前保存的快照，恢复到上一步操作位置
   useIsomorphicLayoutEffect(() => {
@@ -125,6 +136,13 @@ function SourceSearchPageClient() {
       skipCategoryFetchRef.current = true;
       skipVideoFetchRef.current = true;
       pendingScrollTopRef.current = snapshot.scrollTop;
+      if (typeof window !== 'undefined') {
+        takeListScroll(
+          window.sessionStorage,
+          window.location.pathname,
+          window.location.search
+        );
+      }
       setApiSites(snapshot.apiSites);
       setSelectedSource(snapshot.selectedSource);
       setCategories(snapshot.categories);
@@ -142,6 +160,22 @@ function SourceSearchPageClient() {
       setViewMode(snapshot.viewMode);
       setSearchKeyword(snapshot.searchKeyword);
       setSearchInputValue(snapshot.searchInputValue);
+    } else if (typeof window !== 'undefined') {
+      const urlPage = readListPage(
+        new URLSearchParams(window.location.search).get('page')
+      );
+      const savedScroll = takeListScroll(
+        window.sessionStorage,
+        window.location.pathname,
+        window.location.search
+      );
+      if (savedScroll != null && savedScroll > 0) {
+        pendingScrollTopRef.current = savedScroll;
+      }
+      if (urlPage > 1) {
+        backfillToRef.current = urlPage;
+        setCurrentPage(urlPage);
+      }
     }
     setRestoreChecked(true);
   }, []);
@@ -194,9 +228,16 @@ function SourceSearchPageClient() {
     const snapshot = snapshotRef.current;
     if (!snapshot || snapshot.videos.length === 0) return;
     try {
+      const scrollTop = getPageScrollTop();
       sessionStorage.setItem(
         SOURCE_SEARCH_STATE_KEY,
-        JSON.stringify({ ...snapshot, scrollTop: getPageScrollTop() })
+        JSON.stringify({ ...snapshot, scrollTop })
+      );
+      rememberListScroll(
+        sessionStorage,
+        window.location.pathname,
+        window.location.search,
+        scrollTop
       );
     } catch {
       // 忽略 sessionStorage 写入失败（如超出配额）
@@ -249,7 +290,9 @@ function SourceSearchPageClient() {
       setSelectedParentCategory('');
       setSelectedCategory('');
       setVideos([]);
-      setCurrentPage(1);
+      if (!backfillToRef.current) {
+        setCurrentPage(1);
+      }
       setHasMore(true);
       try {
         const response = await fetch(
@@ -288,6 +331,25 @@ function SourceSearchPageClient() {
     const fetchVideos = async () => {
       setIsLoadingVideos(true);
       try {
+        const targetPage = backfillToRef.current;
+        if (targetPage && targetPage > 1) {
+          backfillToRef.current = null;
+          const loaded = await loadPagesInOrder<SearchResult>(targetPage, async (page) => {
+            const response = await fetch(
+              appendSpecialSourceParam(`/api/source-search/videos?source=${encodeURIComponent(selectedSource)}&categoryId=${encodeURIComponent(selectedCategory)}&page=${page}`)
+            );
+            const data = await response.json();
+            const results = Array.isArray(data.results) ? data.results : [];
+            return {
+              items: results,
+              hasMore: Number(data.page) < Number(data.pageCount),
+            };
+          });
+          setVideos(loaded.items);
+          setHasMore(loaded.hasMore);
+          if (loaded.page !== currentPage) setCurrentPage(loaded.page);
+          return;
+        }
         const response = await fetch(
           appendSpecialSourceParam(`/api/source-search/videos?source=${encodeURIComponent(selectedSource)}&categoryId=${encodeURIComponent(selectedCategory)}&page=${currentPage}`)
         );
@@ -324,6 +386,25 @@ function SourceSearchPageClient() {
     const searchVideos = async () => {
       setIsLoadingVideos(true);
       try {
+        const targetPage = backfillToRef.current;
+        if (targetPage && targetPage > 1) {
+          backfillToRef.current = null;
+          const loaded = await loadPagesInOrder<SearchResult>(targetPage, async (page) => {
+            const response = await fetch(
+              appendSpecialSourceParam(`/api/source-search/search?source=${encodeURIComponent(selectedSource)}&keyword=${encodeURIComponent(searchKeyword)}&page=${page}`)
+            );
+            const data = await response.json();
+            const results = Array.isArray(data.results) ? data.results : [];
+            return {
+              items: results,
+              hasMore: Number(data.page) < Number(data.pageCount),
+            };
+          });
+          setVideos(loaded.items);
+          setHasMore(loaded.hasMore);
+          if (loaded.page !== currentPage) setCurrentPage(loaded.page);
+          return;
+        }
         const response = await fetch(
           appendSpecialSourceParam(`/api/source-search/search?source=${encodeURIComponent(selectedSource)}&keyword=${encodeURIComponent(searchKeyword)}&page=${currentPage}`)
         );
