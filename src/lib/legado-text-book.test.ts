@@ -1,6 +1,7 @@
 import { deflateRawSync } from 'zlib';
 
 import {
+  browserChallengeLocation,
   chaptersFromPlainText,
   extractTextFromArchive,
   findTextDownloadHref,
@@ -73,6 +74,14 @@ describe('legado text book fallback', () => {
       isBrowserChallengeHtml('<html><head><title>正在验证浏览器</title></head><body>請稍等，正在進行安全驗證...</body></html>')
     ).toBe(true);
     expect(isBrowserChallengeHtml('<html><article class="page-content"><p>第一章</p></article></html>')).toBe(false);
+  });
+
+  it('builds the ixdzs challenge URL from the page token', () => {
+    const html = '<html><title>正在验证浏览器</title><script>let token = "tok-117097";</script></html>';
+    expect(browserChallengeLocation(html, 'https://ixdzs8.com/read/117097/p3.html?from=toc')).toBe(
+      'https://ixdzs8.com/read/117097/p3.html?challenge=tok-117097'
+    );
+    expect(browserChallengeLocation('<html><p>正文</p></html>', 'https://ixdzs8.com/read/117097/p3.html')).toBeUndefined();
   });
 
   it('finds the official TXT zip on an 爱下 detail page', () => {

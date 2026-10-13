@@ -24,9 +24,11 @@ import { resolveBookTitle, withBookNames } from './book-title';
 import { getConfig } from './config';
 import { legadoSubscriptionStore } from './legado/subscription-store';
 import { formatLegadoHttpError, rewriteLegadoFetchError } from './legado-http-error';
+import { LegadoJsHttpPause, makeLegadoStrResponse, normalizeJsHeaders } from './legado-js-http';
 import { applyLegadoPageRule } from './legado-page-rule';
 import { asLiteralLegadoValue } from './legado-rule-value';
 import {
+  browserChallengeLocation,
   chaptersFromPlainText,
   extractTextFromArchive,
   findTextDownloadHref,
@@ -297,6 +299,9 @@ function makeSourceRuntime(source: any, baseUrl?: string) {
 
 function runJsSnippetRaw(code: string, context: Record<string, any>, timeout = 1000): any {
   const sourceRuntime = makeSourceRuntime(context.source, context.baseUrl);
+  const httpCache: Map<string, { status: number; body: string; url: string }> = context.__legadoHttpCache instanceof Map
+    ? context.__legadoHttpCache
+    : new Map();
   let lastPut: any = null;
   const java = {
     base64Encode: (value: unknown) => Buffer.from(String(value ?? ''), 'utf8').toString('base64'),
@@ -305,7 +310,23 @@ function runJsSnippetRaw(code: string, context: Record<string, any>, timeout = 1
     strToBytes: (value: unknown) => Buffer.from(String(value ?? ''), 'utf8'),
     base64DecodeToByteArray: (value: unknown) => Buffer.from(String(value ?? ''), 'base64'),
     hexDecodeToString: (value: unknown) => Buffer.from(String(value ?? ''), 'hex').toString('utf8'),
-    ajax: () => '',
+    ajax: (url: unknown) => {
+      const pause = new LegadoJsHttpPause({ method: 'GET', url: String(url ?? '') });
+      const hit = httpCache.get(pause.cacheKey);
+      if (!hit) throw pause;
+      return hit.body;
+    },
+    post: (url: unknown, body?: unknown, headers?: unknown) => {
+      const pause = new LegadoJsHttpPause({
+        method: 'POST',
+        url: String(url ?? ''),
+        body: body == null ? '' : String(body),
+        headers: normalizeJsHeaders(headers),
+      });
+      const hit = httpCache.get(pause.cacheKey);
+      if (!hit) throw pause;
+      return makeLegadoStrResponse(hit);
+    },
     getWebViewUA: () => 'Mozilla/5.0 (Linux; Android 10) Mobile Safari/537.36',
     getElements: (selectorRule: string) => {
       const raw = jsonPrimitiveToString(context.result ?? context.src ?? '');
@@ -363,13 +384,17 @@ function runJsSnippetRaw(code: string, context: Record<string, any>, timeout = 1
       if (result !== undefined && result !== null && result !== '') return result;
       if (sandbox.result !== context.result && sandbox.result !== undefined && sandbox.result !== null && sandbox.result !== '') return sandbox.result;
       if (lastPut?.key === 'url') return lastPut.value;
-    } catch {
+    } catch (error) {
+      if (error instanceof LegadoJsHttpPause) throw error;
       // 换下一种包装方式重试
     }
     return undefined;
   };
+  // Legado/Rhino 用脚本最后一条语句的值。if/else 里的 result 只有直接执行才能留下来。
+  let value = runAttempt(body);
+  if (value !== undefined) return value;
   // 1) 整段脚本，脚本自己 return
-  let value = runAttempt(`(function(){ ${body}\n})()`);
+  value = runAttempt(`(function(){ ${body}\n})()`);
   if (value !== undefined) return value;
   // 2) 脚本通过 res 返回（部分源的约定）
   value = runAttempt(`(function(){ ${body}\n; if (typeof res !== 'undefined') return res; return ''; })()`);
@@ -579,11 +604,22 @@ function renderTemplateWithJson(template: string, json: any, source: BookSource,
   return normalizeUrl(baseUrl || sourceBase(source), rendered);
 }
 
+function applyChapterFieldPlaceholders(rule: string): string {
+  return rule.replace(/@get:\{\s*([A-Za-z0-9_$-]+)\s*\}/g, (_, key) => jsonPrimitiveToString(variableStore.get(key)));
+}
+
 function readJsonRule(json: any, rule?: string, source?: BookSource, baseUrl?: string): string {
   if (!rule) return '';
-  const trimmed = rule.trim();
+  const trimmed = applyChapterFieldPlaceholders(rule.trim());
   const literal = asLiteralLegadoValue(trimmed);
   if (literal) return literal;
+  if (/\bjava\s*\.\s*(?:get|put|ajax|post)\s*\(/.test(trimmed)) {
+    const executed = runJsSnippet(trimmed, { result: json, src: json, baseUrl, source: source?.legado || source });
+    if (executed) {
+      if (/^(?:https?:)?\/\//i.test(executed) || executed.startsWith('/')) return normalizeUrl(baseUrl || '', executed);
+      return executed;
+    }
+  }
   if (trimmed.includes('{{')) return renderTemplateWithJson(trimmed, json, source as BookSource, baseUrl || sourceBase(source as BookSource));
   if (isJsRuleString(trimmed)) {
     if (/result\s*=\s*['"]([^'"]+)['"]\s*\+\s*result\.([A-Za-z0-9_$-]+)/.test(trimmed)) {
@@ -1348,6 +1384,27 @@ function getCookieHeader(sourceId: string) {
   return cookieJar.get(sourceId) || '';
 }
 
+function readSetCookie(headers: { get(name: string): string | null; getSetCookie?: () => string[] }): string | null {
+  if (typeof headers.getSetCookie === 'function') {
+    try {
+      const values = headers.getSetCookie();
+      if (Array.isArray(values) && values.length > 0) return values.join(',');
+    } catch {
+      // 测试桩可能没有可用的 getSetCookie。
+    }
+  }
+  return headers.get('set-cookie');
+}
+
+function cookiePairs(setCookie: string | null): string {
+  if (!setCookie) return '';
+  return setCookie
+    .split(/,(?=\s*[^;,]+=)/)
+    .map((item) => item.split(';')[0]?.trim() || '')
+    .filter((item) => item.includes('='))
+    .join('; ');
+}
+
 function mergeSetCookie(sourceId: string, setCookie: string | null) {
   if (!setCookie) return;
   const current = new Map<string, string>();
@@ -1363,9 +1420,18 @@ function mergeSetCookie(sourceId: string, setCookie: string | null) {
   cookieJar.set(sourceId, Array.from(current.entries()).map(([key, value]) => `${key}=${value}`).join('; '));
 }
 
-async function fetchText(source: BookSource, url: string): Promise<string> {
+interface FetchExtra {
+  skipChallenge?: boolean;
+  cookie?: string;
+}
+
+async function fetchText(source: BookSource, url: string, extra?: FetchExtra): Promise<string> {
   if (!url?.trim()) throw new Error('书源请求地址为空');
-  const request = splitUrlOptions(url);
+  return fetchTextRequest(source, splitUrlOptions(url), extra);
+}
+
+async function fetchTextRequest(source: BookSource, request: RequestOptions, extra?: FetchExtra): Promise<string> {
+  if (!request.url?.trim()) throw new Error('书源请求地址为空');
   const safe = await validateProxyUrlServerSide(request.url);
   if (!safe) throw new Error(`书源地址未通过安全校验: ${request.url}`);
   const cacheKey = `text|${source.id}|${request.method || 'GET'}|${request.url}|${request.body || ''}`;
@@ -1383,10 +1449,16 @@ async function fetchText(source: BookSource, url: string): Promise<string> {
         ...(buildHeaders(source) as Record<string, string>),
         ...(request.headers || {}),
       };
-      ensureRequestReferer(headers, source, request.url);
-      const cookie = getCookieHeader(source.id);
-      if (source.legado?.enabledCookieJar && cookie) headers.Cookie = cookie;
       const method = (request.method || (request.body ? 'POST' : 'GET')).toUpperCase();
+      if (method === 'POST' && request.body && !headers['Content-Type'] && !headers['content-type']) {
+        headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
+      }
+      ensureRequestReferer(headers, source, request.url);
+      const cookieParts = [
+        source.legado?.enabledCookieJar ? getCookieHeader(source.id) : '',
+        extra?.cookie || '',
+      ].filter(Boolean);
+      if (cookieParts.length > 0) headers.Cookie = cookieParts.join('; ');
       const response = await fetch(request.url, {
         method,
         headers,
@@ -1394,7 +1466,8 @@ async function fetchText(source: BookSource, url: string): Promise<string> {
         signal: controller.signal,
         cache: 'no-store',
       });
-      if (source.legado?.enabledCookieJar) mergeSetCookie(source.id, response.headers.get('set-cookie'));
+      const setCookie = readSetCookie(response.headers);
+      if (source.legado?.enabledCookieJar) mergeSetCookie(source.id, setCookie);
       if (!response.ok) throw new Error(formatLegadoHttpError(response.status));
       const contentLength = Number(response.headers.get('content-length') || '0');
       if (contentLength > MAX_TEXT_BYTES) throw new Error('响应内容过大');
@@ -1409,6 +1482,15 @@ async function fetchText(source: BookSource, url: string): Promise<string> {
         text = new TextDecoder('utf-8').decode(buffer);
       }
       if (text.length > MAX_TEXT_BYTES) throw new Error('响应内容过大');
+      if (!extra?.skipChallenge) {
+        const nextUrl = browserChallengeLocation(text, request.url);
+        if (nextUrl) {
+          const solved = await fetchText(source, nextUrl, { skipChallenge: true, cookie: cookiePairs(setCookie) });
+          if (solved && !isBrowserChallengeHtml(solved)) text = solved;
+        }
+      }
+      // 验证页没有正文，缓存它会让后续章节请求在有效期内一直是空的。
+      if (isBrowserChallengeHtml(text)) return text;
       textCache.set(cacheKey, { data: text, expiresAt: Date.now() + cacheTTL });
       return text;
     } catch (error) {
@@ -1652,6 +1734,221 @@ async function resolveExploreCategories(source: BookSource, rule: LegadoBookSour
   return [];
 }
 
+async function runJsSnippetRawWithHttp(code: string, context: Record<string, any>, source: BookSource): Promise<any> {
+  const httpCache: Map<string, { status: number; body: string; url: string }> = context.__legadoHttpCache instanceof Map
+    ? context.__legadoHttpCache
+    : new Map();
+  const nextContext = { ...context, __legadoHttpCache: httpCache };
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return runJsSnippetRaw(code, nextContext);
+    } catch (error) {
+      if (!(error instanceof LegadoJsHttpPause)) throw error;
+      const text = await fetchTextRequest(source, {
+        url: error.request.url,
+        method: error.request.method,
+        body: error.request.body,
+        headers: error.request.headers,
+      });
+      httpCache.set(error.cacheKey, { status: 200, body: text, url: error.request.url });
+    }
+  }
+  return '';
+}
+
+async function expandMustache(raw: string, context: Record<string, any>, source: BookSource): Promise<string> {
+  const re = /\{\{([\s\S]*?)\}\}/g;
+  let out = '';
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(raw)) !== null) {
+    out += raw.slice(last, match.index);
+    out += jsonPrimitiveToString(await runJsSnippetRawWithHttp(match[1], context, source));
+    last = match.index + match[0].length;
+  }
+  return out + raw.slice(last);
+}
+
+function rememberBookId(detailHref: string) {
+  const bookId = detailHref.match(/\/read\/(\d+)/i)?.[1];
+  if (bookId) variableStore.set('id', bookId);
+}
+
+async function resolveDynamicTocUrl(source: BookSource, rule: LegadoBookSourceRule, detailHref: string): Promise<string> {
+  const tocRule = (rule.ruleBookInfo?.tocUrl || rule.tocUrl || '').trim();
+  if (!tocRule || !detailHref) return '';
+  rememberBookId(detailHref);
+  const context = {
+    result: detailHref,
+    src: detailHref,
+    baseUrl: detailHref,
+    source: rule,
+    book: { bookUrl: detailHref },
+  };
+  let value = '';
+  if (/^(?:@js:|<js>)/i.test(tocRule)) {
+    value = jsonPrimitiveToString(await runJsSnippetRawWithHttp(tocRule, context, source));
+  } else if (tocRule.includes('{{')) {
+    value = await expandMustache(tocRule, context, source);
+  } else {
+    return asLiteralLegadoValue(tocRule) || '';
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.includes('{{')) return '';
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('/')) return trimmed;
+  return '';
+}
+
+function coerceJsList(value: any): any[] {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') return [value];
+  if (typeof value === 'string') {
+    const parsed = parseJsonMaybe(value);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === 'object') return [parsed];
+  }
+  return [];
+}
+
+function splitChapterListJs(rule: string): { head: string; js: string } | null {
+  const trimmed = rule.trim();
+  if (!trimmed || /^(?:@js:|<js>)/i.test(trimmed)) return null;
+  const match = trimmed.match(/^([\s\S]*?)@js:\s*([\s\S]+)$/i);
+  if (!match?.[1]?.trim() || !match[2]?.trim()) return null;
+  return { head: match[1].trim(), js: match[2].trim() };
+}
+
+function isLegadoFalseFlag(value: string): boolean {
+  const text = value.trim().toLowerCase();
+  return text === '' || text === '0' || text === 'false' || text === 'null' || text === 'undefined';
+}
+
+function appendChapter(
+  chapters: BookChapter[],
+  source: BookSource,
+  baseUrl: string,
+  title: string,
+  href: string,
+  volumeFlag?: string,
+) {
+  if (volumeFlag !== undefined && !isLegadoFalseFlag(volumeFlag)) return;
+  const trimmedHref = href.trim();
+  if (!trimmedHref) return;
+  const normalizedHref = normalizeUrl(baseUrl, trimmedHref);
+  if (!normalizedHref) return;
+  chapters.push({
+    id: stableId(`${source.id}|${normalizedHref}`),
+    title: title.trim() || `第 ${chapters.length + 1} 章`,
+    href: normalizedHref,
+    order: chapters.length,
+  });
+}
+
+function appendJsonChapters(
+  chapters: BookChapter[],
+  source: BookSource,
+  rule: LegadoBookSourceRule,
+  items: any[],
+  baseUrl: string,
+) {
+  items.forEach((item) => {
+    const title = readJsonRule(item, rule.ruleToc?.chapterName, source, baseUrl) || `第 ${chapters.length + 1} 章`;
+    const href = readJsonRule(item, rule.ruleToc?.chapterUrl, source, baseUrl)
+      || fallbackChapterHrefFromItem(item, rule.ruleToc?.chapterUrl, baseUrl);
+    const volumeFlag = rule.ruleToc?.isVolume ? readJsonRule(item, rule.ruleToc.isVolume, source, baseUrl) : undefined;
+    appendChapter(chapters, source, baseUrl, title, href, volumeFlag);
+  });
+}
+
+async function collectRuleChapters(source: BookSource, rule: LegadoBookSourceRule, html: string, targetUrl: string): Promise<BookChapter[]> {
+  const chapters: BookChapter[] = [];
+  const listRule = rule.ruleToc?.chapterList || '';
+  const context = { result: html, src: html, baseUrl: targetUrl, source: rule };
+  let items: any[] | null = null;
+  let handled = false;
+  if (/^(?:@js:|<js>)/i.test(listRule.trim())) {
+    handled = true;
+    if (/java\.getElements\(/.test(listRule) && !/java\.(ajax|post)\s*\(/.test(listRule)) {
+      items = evaluateJsListRule(listRule, context);
+    } else {
+      items = coerceJsList(await runJsSnippetRawWithHttp(listRule, context, source));
+    }
+  } else {
+    const trailing = splitChapterListJs(listRule);
+    const json = parseJsonMaybe(html);
+    if (trailing && json) {
+      handled = true;
+      const selected = readJsonPath(json, trailing.head);
+      const resultText = typeof selected === 'string' ? selected : JSON.stringify(selected ?? []);
+      items = coerceJsList(await runJsSnippetRawWithHttp(trailing.js, { ...context, result: resultText, src: html }, source));
+    } else if (json && ruleIsJson(listRule)) {
+      handled = true;
+      items = selectJsonItems(json, listRule);
+    }
+  }
+  if (handled) {
+    appendJsonChapters(chapters, source, rule, items || [], targetUrl);
+  } else {
+    const $ = cheerio.load(html);
+    const nodes = selectElements($, $.root(), listRule);
+    nodes.each((_, element) => {
+      const root = $(element);
+      const title = readValue($, root, rule.ruleToc?.chapterName, targetUrl) || `第 ${chapters.length + 1} 章`;
+      const href = readValue($, root, rule.ruleToc?.chapterUrl, targetUrl) || root.attr('href') || '';
+      const volumeFlag = rule.ruleToc?.isVolume ? readValue($, root, rule.ruleToc.isVolume, targetUrl) : undefined;
+      appendChapter(chapters, source, targetUrl, title, href, volumeFlag);
+    });
+  }
+  if (rule.ruleToc?.nextTocUrl && chapters.length > 0) {
+    let nextTocUrl = contentFromRule(html, rule.ruleToc.nextTocUrl, targetUrl);
+    const visited = new Set([targetUrl]);
+    for (let page = 0; page < 8 && nextTocUrl; page += 1) {
+      const normalizedNext = normalizeUrl(targetUrl, nextTocUrl);
+      if (!normalizedNext || visited.has(normalizedNext)) break;
+      visited.add(normalizedNext);
+      let nextHtml = '';
+      try {
+        nextHtml = await fetchText(source, normalizedNext);
+      } catch {
+        break;
+      }
+      const $next = cheerio.load(nextHtml);
+      const nextItems = selectElements($next, $next.root(), listRule);
+      nextItems.each((_, element) => {
+        const root = $next(element);
+        const title = readValue($next, root, rule.ruleToc?.chapterName, normalizedNext) || `第 ${chapters.length + 1} 章`;
+        const href = readValue($next, root, rule.ruleToc?.chapterUrl, normalizedNext) || root.attr('href') || '';
+        appendChapter(chapters, source, normalizedNext, title, href);
+      });
+      nextTocUrl = contentFromRule(nextHtml, rule.ruleToc.nextTocUrl, normalizedNext);
+    }
+  }
+  return chapters;
+}
+
+async function readChapterPart(raw: string, rule: string | undefined, baseUrl: string, source: BookSource): Promise<string> {
+  if (rule && /java\.(ajax|post|connect)\s*\(/.test(rule)) {
+    const blockJs = rule.trim().match(/^<js>([\s\S]*?)<\/js>$/i);
+    const jsIndex = rule.indexOf('@js:');
+    const selectorRule = blockJs || jsIndex <= 0 ? '' : rule.slice(0, jsIndex).trim();
+    const jsCode = blockJs ? blockJs[1] : jsIndex >= 0 ? rule.slice(jsIndex) : rule;
+    let seed = raw;
+    if (selectorRule) {
+      const $ = cheerio.load(raw);
+      const values = readValues($, $.root(), selectorRule, baseUrl);
+      seed = values.length > 0 ? values.join('\n') : readValue($, $.root(), selectorRule, baseUrl);
+    }
+    const value = await runJsSnippetRawWithHttp(jsCode, {
+      result: selectorRule ? seed : raw,
+      src: selectorRule ? seed : raw,
+      baseUrl,
+      source: source.legado,
+    }, source);
+    return jsonPrimitiveToString(value);
+  }
+  return chapterContentFromRule(raw, rule, baseUrl);
+}
+
 export class LegadoClient {
   async getSources(): Promise<BookSource[]> {
     const config = await resolveLegadoConfig();
@@ -1881,7 +2178,9 @@ export class LegadoClient {
     const detailHref = (isDirectBookLocator(explicit) ? explicit : '') || fromBookId || readRememberedDetailHref(sourceId, bookId);
     if (!detailHref) throw new Error('该 Legado 书源无法通过 bookId 定位详情，请重新搜索后打开');
     const detail = await this.getBookDetail(sourceId, detailHref, { id: bookId, detailHref });
-    const tocHref = detail.acquisitionLinks.find((item) => item.rel === 'legado:chapters' || item.type.toLowerCase().includes('legado-chapters'))?.href;
+    // 详情缓存命中时不会重跑 tocUrl。目录脚本里的 java.put 仍要在取章节前刷新。
+    const dynamicToc = await resolveDynamicTocUrl(source, rule, detailHref);
+    const tocHref = dynamicToc || detail.acquisitionLinks.find((item) => item.rel === 'legado:chapters' || item.type.toLowerCase().includes('legado-chapters'))?.href;
     if (!tocHref) return [];
     return this.getChapters(sourceId, tocHref);
   }
@@ -1913,7 +2212,8 @@ export class LegadoClient {
         : json
           ? readJsonRule(json, itemRule, source, targetUrl)
           : readValue($ as cheerio.CheerioAPI, root as cheerio.Cheerio<any>, itemRule, targetUrl);
-      const tocUrl = read(rule.ruleBookInfo.tocUrl) || (rule.tocUrl ? buildUrlFromTemplate(rule.tocUrl, source, undefined, 1, detailHref).replace(/\{bookUrl\}/g, encodeURIComponent(detailHref)) : targetUrl);
+      const dynamicToc = await resolveDynamicTocUrl(source, rule, detailHref || targetUrl);
+      const tocUrl = dynamicToc || read(rule.ruleBookInfo.tocUrl) || (rule.tocUrl ? buildUrlFromTemplate(rule.tocUrl, source, undefined, 1, detailHref).replace(/\{bookUrl\}/g, encodeURIComponent(detailHref)) : targetUrl);
       const cover = read(rule.ruleBookInfo.coverUrl) || fallback?.cover;
       const title = resolveBookTitle(
         read(rule.ruleBookInfo.name),
@@ -1975,73 +2275,14 @@ export class LegadoClient {
     const html = await fetchText(source, targetUrl).catch((error) => {
       throw rewriteLegadoFetchError(error, 'toc');
     });
-    try {
-      const textChapters = await tryTextDownloadChapters(source, html, targetUrl);
-      if (textChapters.length > 0) {
-        tocCache.set(cacheKey, { data: textChapters, expiresAt: Date.now() + cacheTTL });
-        return textChapters;
-      }
-    } catch {
-      // 官网压缩包不可用时再回退到页面目录
-    }
-    const chapters: BookChapter[] = [];
-    const json = parseJsonMaybe(html);
-    const jsItems = evaluateJsListRule(rule.ruleToc.chapterList, { result: html, src: html, baseUrl: targetUrl, source: rule });
-    if (jsItems.length > 0) {
-      jsItems.forEach((item, index) => {
-        const title = readJsonRule(item, rule.ruleToc?.chapterName, source, targetUrl) || `第 ${index + 1} 章`;
-        const href = readJsonRule(item, rule.ruleToc?.chapterUrl, source, targetUrl)
-          || fallbackChapterHrefFromItem(item, rule.ruleToc?.chapterUrl, targetUrl);
-        if (!href) return;
-        const normalizedHref = normalizeUrl(targetUrl, href);
-        chapters.push({ id: stableId(`${source.id}|${normalizedHref}`), title, href: normalizedHref, order: index });
-      });
-    } else if (json && ruleIsJson(rule.ruleToc.chapterList)) {
-      const items = selectJsonItems(json, rule.ruleToc.chapterList);
-      items.forEach((item, index) => {
-        const title = readJsonRule(item, rule.ruleToc?.chapterName, source, targetUrl) || `第 ${index + 1} 章`;
-        const href = readJsonRule(item, rule.ruleToc?.chapterUrl, source, targetUrl)
-          || fallbackChapterHrefFromItem(item, rule.ruleToc?.chapterUrl, targetUrl);
-        if (!href) return;
-        const normalizedHref = normalizeUrl(targetUrl, href);
-        chapters.push({ id: stableId(`${source.id}|${normalizedHref}`), title, href: normalizedHref, order: index });
-      });
-    } else {
-      const $ = cheerio.load(html);
-      const items = selectElements($, $.root(), rule.ruleToc.chapterList);
-      items.each((index, element) => {
-        const root = $(element);
-        const title = readValue($, root, rule.ruleToc?.chapterName, targetUrl) || `第 ${index + 1} 章`;
-        const href = readValue($, root, rule.ruleToc?.chapterUrl, targetUrl) || root.attr('href') || '';
-        if (!href) return;
-        const normalizedHref = normalizeUrl(targetUrl, href);
-        chapters.push({ id: stableId(`${source.id}|${normalizedHref}`), title, href: normalizedHref, order: index });
-      });
-    }
-    if (rule.ruleToc.nextTocUrl) {
-      let nextTocUrl = contentFromRule(html, rule.ruleToc.nextTocUrl, targetUrl);
-      const visited = new Set([targetUrl]);
-      for (let page = 0; page < 8 && nextTocUrl; page += 1) {
-        const normalizedNext = normalizeUrl(targetUrl, nextTocUrl);
-        if (!normalizedNext || visited.has(normalizedNext)) break;
-        visited.add(normalizedNext);
-        let nextHtml = '';
-        try {
-          nextHtml = await fetchText(source, normalizedNext);
-        } catch {
-          break;
-        }
-        const $next = cheerio.load(nextHtml);
-        const nextItems = selectElements($next, $next.root(), rule.ruleToc.chapterList);
-        nextItems.each((index, element) => {
-          const root = $next(element);
-          const title = readValue($next, root, rule.ruleToc?.chapterName, normalizedNext) || `第 ${chapters.length + index + 1} 章`;
-          const href = readValue($next, root, rule.ruleToc?.chapterUrl, normalizedNext) || root.attr('href') || '';
-          if (!href) return;
-          const normalizedHref = normalizeUrl(normalizedNext, href);
-          chapters.push({ id: stableId(`${source.id}|${normalizedHref}`), title, href: normalizedHref, order: chapters.length });
-        });
-        nextTocUrl = contentFromRule(nextHtml, rule.ruleToc.nextTocUrl, normalizedNext);
+    rememberBookId(targetUrl);
+    let chapters = await collectRuleChapters(source, rule, html, targetUrl);
+    if (chapters.length === 0) {
+      try {
+        const textChapters = await tryTextDownloadChapters(source, html, targetUrl);
+        if (textChapters.length > 0) chapters = textChapters;
+      } catch {
+        // 官网压缩包不可用时保留空目录，让调用方看到书源规则没有抽出章节。
       }
     }
     tocCache.set(cacheKey, { data: chapters, expiresAt: Date.now() + cacheTTL });
@@ -2088,7 +2329,7 @@ export class LegadoClient {
       const html = await fetchText(source, pageUrl).catch((error) => {
         throw rewriteLegadoFetchError(error, 'content');
       });
-      const part = chapterContentFromRule(html, rule.ruleContent.content, pageUrl);
+      const part = await readChapterPart(html, rule.ruleContent.content, pageUrl, source);
       if (part) parts.push(part);
       const next = rule.ruleContent.nextContentUrl ? contentFromRule(html, rule.ruleContent.nextContentUrl, pageUrl) : '';
       const normalizedNext = next ? normalizeUrl(pageUrl, next) : '';
