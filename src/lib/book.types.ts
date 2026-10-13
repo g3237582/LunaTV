@@ -42,6 +42,8 @@ export interface LegadoRuleToc {
   chapterUrl?: string;
   isVip?: string;
   isPay?: string;
+  /** 结果为 1/true 时该条是卷名，不进入可阅读章节。0、false、空字符串不是卷。 */
+  isVolume?: string;
   nextTocUrl?: string;
   updateTime?: string;
   wordCount?: string;

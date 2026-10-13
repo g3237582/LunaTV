@@ -28,6 +28,22 @@ export function isBrowserChallengeHtml(html: string): boolean {
   return /正在验证浏览器|正在進行安全驗證|請稍等|Just a moment|Attention Required/i.test(text);
 }
 
+/**
+ * 爱下等站点的章节页会先返回一段脚本：写入 token，再跳到
+ * `pathname?challenge=token`。必须带着同一次响应的会话 Cookie 再请求，正文才会出现。
+ */
+export function browserChallengeLocation(html: string, pageUrl: string): string | undefined {
+  if (!isBrowserChallengeHtml(html)) return undefined;
+  const token = String(html || '').match(/token\s*=\s*["']([^"']+)["']/)?.[1];
+  if (!token) return undefined;
+  try {
+    const parsed = new URL(pageUrl);
+    return `${parsed.origin}${parsed.pathname}?challenge=${encodeURIComponent(token)}`;
+  } catch {
+    return undefined;
+  }
+}
+
 export function findTextDownloadHref(html: string, baseUrl: string): string | undefined {
   const source = String(html || '');
   const hrefs: string[] = [];
