@@ -262,3 +262,5 @@ describe('ruleBookInfo.init 的 JS 变量', () => {
     expect(content.content).toContain('我比现在年轻十岁的时候');
   });
 });
+
+export {};

@@ -85,7 +85,8 @@ export function lookupBookDetail(
   const known = knownBookDetails.get(sourceId);
   if (!known || !chapterHref) return '';
   let best = '';
-  for (const detail of known) {
+  // tsconfig target 是 es5，直接 for...of Set 会让 next build 的类型检查失败。
+  for (const detail of Array.from(known)) {
     if (!chapterHref.startsWith(detail)) continue;
     const next = chapterHref.charAt(detail.length);
     // 详情地址通常以 / 结尾，章节页接在后面，例如 /read/220620/p1.html。

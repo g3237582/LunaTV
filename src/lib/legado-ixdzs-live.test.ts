@@ -212,3 +212,5 @@ describeLive('爱下电子书线上阅读', () => {
     expect(brothers.content.content).toMatch(/[\u4e00-\u9fff]/);
   });
 });
+
+export {};
