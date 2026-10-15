@@ -297,6 +297,18 @@ function makeSourceRuntime(source: any, baseUrl?: string) {
   };
 }
 
+// Legado 在执行 <js>/@js 之前，会先把 {{$.字段}} 换成当前结果上的值。
+// 留在脚本里时 {{ }} 是语法错误，整段 <js> 会原样拼进章节地址。
+function expandJsonPlaceholdersInJs(code: string, data: any): string {
+  if (!code.includes('{{')) return code;
+  return code.replace(
+    /\{\{\s*((?:-?@json:)?\$[\s\S]*?)\s*\}\}/g,
+    (_match, expr: string) => {
+      return jsonPrimitiveToString(readJsonPath(data, String(expr).trim()));
+    }
+  );
+}
+
 function runJsSnippetRaw(code: string, context: Record<string, any>, timeout = 1000): any {
   const sourceRuntime = makeSourceRuntime(context.source, context.baseUrl);
   const httpCache: Map<string, { status: number; body: string; url: string }> = context.__legadoHttpCache instanceof Map
@@ -376,7 +388,7 @@ function runJsSnippetRaw(code: string, context: Record<string, any>, timeout = 1
     getArguments: (value: string, key?: string) => key ? (parseArguments(value)[key] || '') : parseArguments(value),
     console: { log: () => undefined },
   };
-  const body = unwrapJsRule(code);
+  const body = expandJsonPlaceholdersInJs(unwrapJsRule(code), context.result);
   const runAttempt = (wrapper: string): any => {
     try {
       const script = new vm.Script(wrapper);

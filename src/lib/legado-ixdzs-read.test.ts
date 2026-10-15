@@ -54,6 +54,31 @@ const JSON_SOURCE = {
   ruleContent: { content: 'section@p@html' },
 };
 
+// 线上爱下书源的 chapterUrl 把 JSON 字段写在 <js> 里面。
+// {{$.ordernum}} 必须先换成当前章节的 ordernum，再执行 JS；
+// java.get("a") 则依赖 tocUrl 里 java.put("a", 详情页地址)。
+const JS_CHAPTER_URL = `<js>b=java.get("a");b+'p'+{{$.ordernum}}+'.html'</js>`;
+
+const JS_TEMPLATE_SOURCE = {
+  ...JSON_SOURCE,
+  bookSourceName: '爱下JS模板章节',
+  ruleToc: {
+    ...JSON_SOURCE.ruleToc,
+    chapterUrl: JS_CHAPTER_URL,
+  },
+};
+
+const BROTHERS_URL = 'https://ixdzs8.com/read/220620/';
+const BROTHERS_CLIST = JSON.stringify({
+  rs: 200,
+  data: [
+    { ctype: '0', ordernum: '1', title: '第一章' },
+    { ctype: '0', ordernum: '2', title: '第二章' },
+  ],
+});
+const BROTHERS_ARTICLE =
+  '<html><body><article class="page-content"><section><p>兄弟俩在屋檐下避雨，谁也不肯先开口。</p></section></article></body></html>';
+
 const FILTER_SOURCE = {
   ...JSON_SOURCE,
   bookSourceName: '爱下过滤目录',
@@ -145,6 +170,7 @@ describe('爱下电子书 Legado 目录与正文', () => {
     process.env.LEGADO_ENABLED = 'true';
     process.env.LEGADO_SOURCES_JSON = JSON.stringify([
       JSON_SOURCE,
+      JS_TEMPLATE_SOURCE,
       FILTER_SOURCE,
       SCRIPT_SOURCE,
     ]);
@@ -160,8 +186,10 @@ describe('爱下电子书 Legado 目录与正文', () => {
         const body = init?.body == null ? '' : String(init.body);
         const cookie = headerValue(init?.headers, 'cookie');
         calls.push({ url, method, body, cookie });
-        if (method === 'POST' && url.includes('/novel/clist'))
+        if (method === 'POST' && url.includes('/novel/clist')) {
+          if (body.includes('bid=220620')) return htmlResponse(BROTHERS_CLIST);
           return htmlResponse(CLIST);
+        }
         if (url.includes('/117097.zip') || url.includes('down7.ixdzs8.com'))
           return htmlResponse('损坏的全文');
         if (url.endsWith('/p3.txt')) return htmlResponse(AJAX_TEXT);
@@ -170,9 +198,12 @@ describe('爱下电子书 Legado 目录与正文', () => {
             return htmlResponse(CHALLENGE_HTML, 'PHPSESSID=abc');
           return htmlResponse(ARTICLE_HTML);
         }
+        if (url.includes('/220620/p1.html'))
+          return htmlResponse(BROTHERS_ARTICLE);
         if (url.includes('/p3.html'))
           return htmlResponse(CHALLENGE_HTML, 'PHPSESSID=abc');
-        if (url.includes('/read/117097')) return htmlResponse(DETAIL_HTML);
+        if (url.includes('/read/117097') || url.includes('/read/220620'))
+          return htmlResponse(DETAIL_HTML);
         return htmlResponse('<html></html>');
       }
     ) as unknown as typeof fetch;
@@ -197,6 +228,46 @@ describe('爱下电子书 Legado 目录与正文', () => {
     );
     return { legadoClient, source, chapters };
   }
+
+  it('把 <js> 里的 {{$.ordernum}} 展开，并用 java.get("a") 的详情地址拼章节页', async () => {
+    const { legadoClient, source, chapters } = await openChapters(
+      '爱下JS模板章节'
+    );
+
+    expect(chapters.map((item) => item.href)).toEqual([
+      'https://ixdzs8.com/read/117097/p2.html',
+      CHAPTER_URL,
+      'https://ixdzs8.com/read/117097/p4.html',
+    ]);
+    expect(
+      chapters.every(
+        (item) => !item.href.includes('<js>') && !item.href.includes('clist')
+      )
+    ).toBe(true);
+
+    const brothers = await legadoClient.getChaptersByBookId(
+      source.id,
+      BROTHERS_URL,
+      {
+        detailHref: BROTHERS_URL,
+      }
+    );
+    expect(brothers.map((item) => item.href)).toEqual([
+      'https://ixdzs8.com/read/220620/p1.html',
+      'https://ixdzs8.com/read/220620/p2.html',
+    ]);
+
+    const early = await legadoClient.getChapterContent(
+      source.id,
+      chapters[1].href
+    );
+    expect(early.content).toContain('我比现在年轻十岁的时候');
+    const first = await legadoClient.getChapterContent(
+      source.id,
+      brothers[0].href
+    );
+    expect(first.content).toContain('兄弟俩在屋檐下避雨');
+  });
 
   it('用详情里的 tocUrl POST 目录，并算出 java.get 章节地址', async () => {
     const { chapters } = await openChapters('爱下JSON目录');

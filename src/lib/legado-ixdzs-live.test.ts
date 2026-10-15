@@ -36,7 +36,7 @@ const POST_SOURCE = {
   ruleToc: {
     chapterList: '$.data[*]',
     chapterName: '$.title',
-    chapterUrl: 'java.get("a")+"p"+result.ordernum+".html"',
+    chapterUrl: `<js>b=java.get("a");b+'p'+{{$.ordernum}}+'.html'</js>`,
     isVolume: '$.ctype',
   },
   ruleContent: { content: 'section@p@html' },
