@@ -17,6 +17,36 @@ const HEADER = JSON.stringify({
     'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Mobile Safari/537.36',
 });
 
+const ORIGINAL_TOC = String.raw`https://ixdzs8.com/novel/clist/,{"method":"POST","body":"bid={{baseUrl.match(/\/read\/(\d+)/)[1]}}","headers":{"Referer":"{{baseUrl}}"}}`;
+
+const ORIGINAL_SOURCE = {
+  bookSourceName: '爱下电子书原始预处理',
+  bookSourceUrl: 'https://ixdzs8.com',
+  searchUrl: '/bsearch?q={{key}}&page={{page}}',
+  enabledCookieJar: true,
+  header: HEADER,
+  ruleSearch: {
+    bookList: '.u-list li',
+    name: 'a@title',
+    bookUrl: 'a@href',
+  },
+  ruleBookInfo: {
+    init: '<js>java.put("a", baseUrl)</js>',
+    name: 'h1@text',
+    author: '.bauthor a@text',
+    tocUrl: ORIGINAL_TOC,
+  },
+  ruleToc: {
+    chapterList: '$.data[*]',
+    chapterName: '$.title',
+    chapterUrl: `<js>b=java.get("a");b+'p'+{{$.ordernum}}+'.html'</js>`,
+    isVolume: '$.ctype',
+  },
+  ruleContent: { content: 'section@p@html' },
+};
+
+const BROTHERS_URL = 'https://ixdzs8.com/read/220620/';
+
 const POST_SOURCE = {
   bookSourceName: '爱下电子书',
   bookSourceUrl: 'https://ixdzs8.com',
@@ -96,7 +126,7 @@ if (!section) {
   },
 };
 
-async function readHuozhe(rule: { bookSourceName: string }) {
+async function readBook(rule: { bookSourceName: string }, detailUrl: string) {
   const previousSources = process.env.LEGADO_SOURCES_JSON;
   const previousEnabled = process.env.LEGADO_ENABLED;
   process.env.LEGADO_ENABLED = 'true';
@@ -110,8 +140,8 @@ async function readHuozhe(rule: { bookSourceName: string }) {
     if (!source) throw new Error('书源未加载');
     const chapters = await legadoClient.getChaptersByBookId(
       source.id,
-      DETAIL_URL,
-      { detailHref: DETAIL_URL }
+      detailUrl,
+      { detailHref: detailUrl }
     );
     const chapter =
       chapters.find((item) => item.title.includes('第一章')) || chapters[0];
@@ -119,7 +149,7 @@ async function readHuozhe(rule: { bookSourceName: string }) {
     const content = await legadoClient.getChapterContent(
       source.id,
       chapter.href,
-      DETAIL_URL
+      detailUrl
     );
     return { chapters, chapter, content };
   } finally {
@@ -130,8 +160,12 @@ async function readHuozhe(rule: { bookSourceName: string }) {
   }
 }
 
+function readHuozhe(rule: { bookSourceName: string }) {
+  return readBook(rule, DETAIL_URL);
+}
+
 describeLive('爱下电子书线上阅读', () => {
-  jest.setTimeout(90000);
+  jest.setTimeout(180000);
 
   beforeAll(() => {
     if (typeof global.fetch !== 'function') {
@@ -155,5 +189,26 @@ describeLive('爱下电子书线上阅读', () => {
     expect(chapters.length).toBeGreaterThan(3);
     expect(chapter.href).toMatch(/\/read\/117097\/p\d+\.html/);
     expect(content.content).toContain('我比现在年轻十岁');
+  });
+
+  it('原始 <js> init 的 java.put 让《活着》和《兄弟》章节落到详情页，正文是中文', async () => {
+    const huozhe = await readBook(ORIGINAL_SOURCE, DETAIL_URL);
+    expect(huozhe.chapters.length).toBeGreaterThan(3);
+    expect(
+      huozhe.chapters.every((item) =>
+        /^https:\/\/ixdzs8\.com\/read\/117097\/p\d+\.html$/.test(item.href)
+      )
+    ).toBe(true);
+    expect(huozhe.chapter.href).toMatch(/\/read\/117097\/p\d+\.html$/);
+    expect(huozhe.content.content).toContain('我比现在年轻十岁');
+
+    const brothers = await readBook(ORIGINAL_SOURCE, BROTHERS_URL);
+    expect(brothers.chapters.length).toBeGreaterThan(1);
+    expect(
+      brothers.chapters.every((item) =>
+        /^https:\/\/ixdzs8\.com\/read\/220620\/p\d+\.html$/.test(item.href)
+      )
+    ).toBe(true);
+    expect(brothers.content.content).toMatch(/[\u4e00-\u9fff]/);
   });
 });
