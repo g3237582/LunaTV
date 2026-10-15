@@ -23,6 +23,7 @@ import {
 import { resolveBookTitle, withBookNames } from './book-title';
 import { getConfig } from './config';
 import { legadoSubscriptionStore } from './legado/subscription-store';
+import { activeVariables, isCurrentBookScope, lookupBookDetail, rememberBookDetail, withBookVariables } from './legado-book-scope';
 import { formatLegadoHttpError, rewriteLegadoFetchError } from './legado-http-error';
 import { LegadoJsHttpPause, makeLegadoStrResponse, normalizeJsHeaders } from './legado-js-http';
 import { applyLegadoPageRule } from './legado-page-rule';
@@ -71,7 +72,6 @@ interface RequestOptions {
 }
 
 const cookieJar = new Map<string, string>();
-const variableStore = new Map<string, any>();
 const imageMemoryCache = new Map<string, { expiresAt: number; contentType: string; data: Uint8Array }>();
 
 function stableId(input: string) {
@@ -359,8 +359,8 @@ function runJsSnippetRaw(code: string, context: Record<string, any>, timeout = 1
     startBrowserAwait: () => ({ body: () => '' }),
     encodeURI: (value: unknown) => encodeURIComponent(String(value ?? '')),
     encodeURIComponent: (value: unknown) => encodeURIComponent(String(value ?? '')),
-    put: (key: string, value: any) => { lastPut = { key, value }; variableStore.set(key, value); return value; },
-    get: (key: string) => variableStore.get(key),
+    put: (key: string, value: any) => { lastPut = { key, value }; activeVariables().set(key, value); return value; },
+    get: (key: string) => activeVariables().get(key),
     log: () => undefined,
     htmlFormat: (value: unknown) => he.decode(String(value ?? '')).replace(/<br\s*\/?/gi, '\n').replace(/<[^>]+>/g, ''),
   };
@@ -432,14 +432,14 @@ function applyPutGetRules(rule: string, value: string) {
   if (putMatch) {
     try {
       const obj = JSON.parse(`{${putMatch[1]}}`);
-      Object.entries(obj).forEach(([key, val]) => variableStore.set(key, val));
+      Object.entries(obj).forEach(([key, val]) => activeVariables().set(key, val));
     } catch {
       const pair = putMatch[1].match(/([A-Za-z0-9_$-]+)\s*:\s*['"]?([^,'"]+)['"]?/);
-      if (pair) variableStore.set(pair[1], value || pair[2]);
+      if (pair) activeVariables().set(pair[1], value || pair[2]);
     }
   }
   const getMatch = rule.match(/@get:\s*\{\s*([A-Za-z0-9_$-]+)\s*\}/);
-  if (getMatch) return jsonPrimitiveToString(variableStore.get(getMatch[1]));
+  if (getMatch) return jsonPrimitiveToString(activeVariables().get(getMatch[1]));
   return value;
 }
 
@@ -617,7 +617,7 @@ function renderTemplateWithJson(template: string, json: any, source: BookSource,
 }
 
 function applyChapterFieldPlaceholders(rule: string): string {
-  return rule.replace(/@get:\{\s*([A-Za-z0-9_$-]+)\s*\}/g, (_, key) => jsonPrimitiveToString(variableStore.get(key)));
+  return rule.replace(/@get:\{\s*([A-Za-z0-9_$-]+)\s*\}/g, (_, key) => jsonPrimitiveToString(activeVariables().get(key)));
 }
 
 function readJsonRule(json: any, rule?: string, source?: BookSource, baseUrl?: string): string {
@@ -1017,7 +1017,7 @@ function readValue($: cheerio.CheerioAPI, root: cheerio.Cheerio<any>, rule?: str
     const normalized = stripFilters(alternative);
     const getMatch = normalized.match(/^@get:\s*\{\s*([A-Za-z0-9_$-]+)\s*\}$/);
     if (getMatch) {
-      const value = jsonPrimitiveToString(variableStore.get(getMatch[1]));
+      const value = jsonPrimitiveToString(activeVariables().get(getMatch[1]));
       if (value) return value;
       continue;
     }
@@ -1113,8 +1113,97 @@ function applyBookInfoInit($: cheerio.CheerioAPI, root: cheerio.Cheerio<any>, in
   while ((match = entryRegex.exec(body)) !== null) {
     const key = match[1];
     const selector = match[2].replace(/\\"/g, '"').replace(/\\n/g, '\n');
-    variableStore.set(key, readValue($, root, selector, baseUrl));
+    activeVariables().set(key, readValue($, root, selector, baseUrl));
   }
+}
+
+function bookInfoInitRule(rule: LegadoBookSourceRule): string {
+  return String(rule.ruleBookInfo?.init || rule.bookInfoInit || '').trim();
+}
+
+function isJsInitRule(rule: string): boolean {
+  return /^(?:@js:|<js>)/i.test(rule.trim());
+}
+
+function bookInfoInitNeedsReplay(rule: LegadoBookSourceRule): boolean {
+  const initRule = bookInfoInitRule(rule);
+  return isJsInitRule(initRule) || /@put\s*:/i.test(initRule);
+}
+
+function bookInfoPageUrl(source: BookSource, rule: LegadoBookSourceRule, detailHref: string): string {
+  if (!rule.bookInfoUrl) return detailHref;
+  return buildUrlFromTemplate(rule.bookInfoUrl, source, undefined, 1, detailHref).replace(/\{bookUrl\}/g, encodeURIComponent(detailHref));
+}
+
+function isHtmlDocument(value: string): boolean {
+  return /<\/?[a-z][\s\S]*>/i.test(value);
+}
+
+interface PreparedBookInfo {
+  html: string;
+  json: any | null;
+  initData: Record<string, string> | null;
+  $: cheerio.CheerioAPI | null;
+  root: cheerio.Cheerio<any> | null;
+}
+
+async function runBookInfoJsInit(
+  source: BookSource,
+  rule: LegadoBookSourceRule,
+  initRule: string,
+  html: string,
+  baseUrl: string
+): Promise<{ html: string; json: any | null }> {
+  // baseUrl 是详情页地址，result/src 是详情响应。java.put 的返回值经常就是这个地址，
+  // 不能把它当成新的页面内容，否则后面的 h1@text 会对着 URL 解析。
+  const value = await runJsSnippetRawWithHttp(initRule, {
+    result: html,
+    src: html,
+    baseUrl,
+    source: rule,
+    book: { bookUrl: baseUrl },
+  }, source);
+  if (value && typeof value === 'object') return { html, json: value };
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = parseJsonMaybe(value);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return { html, json: parsed };
+    if (isHtmlDocument(value)) return { html: value, json: null };
+  }
+  return { html, json: null };
+}
+
+async function prepareBookInfoPage(
+  source: BookSource,
+  rule: LegadoBookSourceRule,
+  html: string,
+  baseUrl: string
+): Promise<PreparedBookInfo> {
+  const initRule = bookInfoInitRule(rule);
+  let pageHtml = html;
+  let initObject: any = null;
+  if (isJsInitRule(initRule)) {
+    const evaluated = await runBookInfoJsInit(source, rule, initRule, html, baseUrl);
+    pageHtml = evaluated.html;
+    initObject = evaluated.json;
+  }
+  const colonRule = !isJsInitRule(initRule) && initRule.startsWith(':')
+    ? initRule
+    : !isJsInitRule(initRule) && rule.bookInfoInit?.trim().startsWith(':')
+      ? rule.bookInfoInit.trim()
+      : '';
+  const initData = !initObject && colonRule ? readAllInOneList(pageHtml, colonRule)[0] || null : null;
+  const json = initObject || (initData ? null : parseJsonMaybe(pageHtml));
+  const $ = initData || json ? null : cheerio.load(pageHtml);
+  const root = $ ? $.root() : null;
+  if ($ && root && !isJsInitRule(initRule)) applyBookInfoInit($, root, initRule, baseUrl);
+  return { html: pageHtml, json, initData, $, root };
+}
+
+async function refreshBookInfoInit(source: BookSource, rule: LegadoBookSourceRule, detailHref: string): Promise<void> {
+  if (!bookInfoInitNeedsReplay(rule) || !detailHref) return;
+  const targetUrl = bookInfoPageUrl(source, rule, detailHref);
+  const html = await fetchText(source, targetUrl);
+  await prepareBookInfoPage(source, rule, html, targetUrl);
 }
 
 function applyContentJsRule(value: string, jsRule: string): string {
@@ -1783,7 +1872,7 @@ async function expandMustache(raw: string, context: Record<string, any>, source:
 
 function rememberBookId(detailHref: string) {
   const bookId = detailHref.match(/\/read\/(\d+)/i)?.[1];
-  if (bookId) variableStore.set('id', bookId);
+  if (bookId) activeVariables().set('id', bookId);
 }
 
 async function resolveDynamicTocUrl(source: BookSource, rule: LegadoBookSourceRule, detailHref: string): Promise<string> {
@@ -2190,11 +2279,15 @@ export class LegadoClient {
     const detailHref = (isDirectBookLocator(explicit) ? explicit : '') || fromBookId || readRememberedDetailHref(sourceId, bookId);
     if (!detailHref) throw new Error('该 Legado 书源无法通过 bookId 定位详情，请重新搜索后打开');
     const detail = await this.getBookDetail(sourceId, detailHref, { id: bookId, detailHref });
-    // 详情缓存命中时不会重跑 tocUrl。目录脚本里的 java.put 仍要在取章节前刷新。
-    const dynamicToc = await resolveDynamicTocUrl(source, rule, detailHref);
-    const tocHref = dynamicToc || detail.acquisitionLinks.find((item) => item.rel === 'legado:chapters' || item.type.toLowerCase().includes('legado-chapters'))?.href;
-    if (!tocHref) return [];
-    return this.getChapters(sourceId, tocHref);
+    // 详情缓存命中时不会重跑 init / tocUrl。java.put 仍要在取章节前按这本书刷新。
+    return withBookVariables(source.id, detailHref, async () => {
+      await refreshBookInfoInit(source, rule, detailHref).catch(() => undefined);
+      const dynamicToc = await resolveDynamicTocUrl(source, rule, detailHref);
+      const tocHref = dynamicToc || detail.acquisitionLinks.find((item) => item.rel === 'legado:chapters' || item.type.toLowerCase().includes('legado-chapters'))?.href;
+      rememberBookDetail(source.id, detailHref, tocHref);
+      if (!tocHref) return [];
+      return this.getChapters(sourceId, tocHref);
+    });
   }
 
   async getBookDetail(sourceId: string, href: string, fallback?: Partial<BookDetail>): Promise<BookDetail> {
@@ -2212,47 +2305,46 @@ export class LegadoClient {
 
     let detail: BookDetail | null = null;
     if (detailHref && rule.ruleBookInfo) {
-      const targetUrl = rule.bookInfoUrl ? buildUrlFromTemplate(rule.bookInfoUrl, source, undefined, 1, detailHref).replace(/\{bookUrl\}/g, encodeURIComponent(detailHref)) : detailHref;
-      const html = await fetchText(source, targetUrl);
-      const initData = rule.bookInfoInit?.trim().startsWith(':') ? readAllInOneList(html, rule.bookInfoInit)[0] : null;
-      const json = initData || parseJsonMaybe(html);
-      const $ = json && initData ? null : json ? null : cheerio.load(html);
-      const root = $?.root();
-      if ($ && root) applyBookInfoInit($, root, (rule.ruleBookInfo as any).init || rule.bookInfoInit, targetUrl);
-      const read = (itemRule?: string) => initData
-        ? readRegexItem(initData, itemRule, targetUrl)
-        : json
-          ? readJsonRule(json, itemRule, source, targetUrl)
-          : readValue($ as cheerio.CheerioAPI, root as cheerio.Cheerio<any>, itemRule, targetUrl);
-      const dynamicToc = await resolveDynamicTocUrl(source, rule, detailHref || targetUrl);
-      const tocUrl = dynamicToc || read(rule.ruleBookInfo.tocUrl) || (rule.tocUrl ? buildUrlFromTemplate(rule.tocUrl, source, undefined, 1, detailHref).replace(/\{bookUrl\}/g, encodeURIComponent(detailHref)) : targetUrl);
-      const cover = read(rule.ruleBookInfo.coverUrl) || fallback?.cover;
-      const title = resolveBookTitle(
-        read(rule.ruleBookInfo.name),
-        json ? jsonPrimitiveToString((json as any)?.name) || jsonPrimitiveToString((json as any)?.data?.name) : '',
-        fallback?.title,
-        fallback?.name
-      );
-      const chapterCountText = json
-        ? jsonPrimitiveToString(readJsonPath(json, '@json:$.data.nums') ?? readJsonPath(json, '@json:$.data.chapter_nums'))
-        : '';
-      const chapterCount = chapterCountText ? Number(chapterCountText) : NaN;
-      const hasKnownEmptyChapters = Number.isFinite(chapterCount) && chapterCount <= 0;
-      const acquisitionLinks: BookAcquisitionLink[] = hasKnownEmptyChapters ? [] : [{ rel: 'legado:chapters', type: 'application/x-legado-chapters+json', href: tocUrl, title: '章节目录' }];
-      detail = {
-        id: fallback?.id || stableId(`${source.id}|${detailHref || title}`),
-        sourceId,
-        sourceName: source.name,
-        ...withBookNames(title),
-        author: read(rule.ruleBookInfo.author) || fallback?.author,
-        cover: toBookCoverSrc(sourceId, cover, 'image'),
-        summary: read(rule.ruleBookInfo.intro) || fallback?.summary,
-        tags: read(rule.ruleBookInfo.kind).split(/[,，\s]+/).filter(Boolean),
-        categories: read(rule.ruleBookInfo.kind).split(/[,，\s]+/).filter(Boolean),
-        detailHref,
-        acquisitionLinks,
-        navigation: hasKnownEmptyChapters ? [] : [{ title: '目录', href: tocUrl, rel: 'legado:toc', type: 'application/x-legado-chapters+json' }],
-      };
+      const targetUrl = bookInfoPageUrl(source, rule, detailHref);
+      detail = await withBookVariables(source.id, detailHref, async () => {
+        const html = await fetchText(source, targetUrl);
+        const page = await prepareBookInfoPage(source, rule, html, targetUrl);
+        const read = (itemRule?: string) => page.initData
+          ? readRegexItem(page.initData, itemRule, targetUrl)
+          : page.json
+            ? readJsonRule(page.json, itemRule, source, targetUrl)
+            : readValue(page.$ as cheerio.CheerioAPI, page.root as cheerio.Cheerio<any>, itemRule, targetUrl);
+        const dynamicToc = await resolveDynamicTocUrl(source, rule, detailHref || targetUrl);
+        const tocUrl = dynamicToc || read(rule.ruleBookInfo?.tocUrl) || (rule.tocUrl ? buildUrlFromTemplate(rule.tocUrl, source, undefined, 1, detailHref).replace(/\{bookUrl\}/g, encodeURIComponent(detailHref)) : targetUrl);
+        rememberBookDetail(source.id, detailHref, tocUrl);
+        const cover = read(rule.ruleBookInfo?.coverUrl) || fallback?.cover;
+        const title = resolveBookTitle(
+          read(rule.ruleBookInfo?.name),
+          page.json ? jsonPrimitiveToString((page.json as any)?.name) || jsonPrimitiveToString((page.json as any)?.data?.name) : '',
+          fallback?.title,
+          fallback?.name
+        );
+        const chapterCountText = page.json
+          ? jsonPrimitiveToString(readJsonPath(page.json, '@json:$.data.nums') ?? readJsonPath(page.json, '@json:$.data.chapter_nums'))
+          : '';
+        const chapterCount = chapterCountText ? Number(chapterCountText) : NaN;
+        const hasKnownEmptyChapters = Number.isFinite(chapterCount) && chapterCount <= 0;
+        const acquisitionLinks: BookAcquisitionLink[] = hasKnownEmptyChapters ? [] : [{ rel: 'legado:chapters', type: 'application/x-legado-chapters+json', href: tocUrl, title: '章节目录' }];
+        return {
+          id: fallback?.id || stableId(`${source.id}|${detailHref || title}`),
+          sourceId,
+          sourceName: source.name,
+          ...withBookNames(title),
+          author: read(rule.ruleBookInfo?.author) || fallback?.author,
+          cover: toBookCoverSrc(sourceId, cover, 'image'),
+          summary: read(rule.ruleBookInfo?.intro) || fallback?.summary,
+          tags: (read(rule.ruleBookInfo?.kind) || '').split(/[,，\s]+/).filter(Boolean),
+          categories: (read(rule.ruleBookInfo?.kind) || '').split(/[,，\s]+/).filter(Boolean),
+          detailHref,
+          acquisitionLinks,
+          navigation: hasKnownEmptyChapters ? [] : [{ title: '目录', href: tocUrl, rel: 'legado:toc', type: 'application/x-legado-chapters+json' }],
+        };
+      });
     }
 
     if (!detail) {
@@ -2304,6 +2396,13 @@ export class LegadoClient {
   async getChapterContent(sourceId: string, chapterHref: string, tocHref?: string): Promise<BookChapterContent> {
     const source = await getSourceById(sourceId);
     const rule = getRule(source);
+    const owner = lookupBookDetail(source.id, normalizeUrl(sourceBase(source), chapterHref), tocHref);
+    if (owner && bookInfoInitNeedsReplay(rule) && !isCurrentBookScope(source.id, owner)) {
+      return withBookVariables(source.id, owner, async () => {
+        await refreshBookInfoInit(source, rule, owner).catch(() => undefined);
+        return this.getChapterContent(sourceId, chapterHref, tocHref);
+      });
+    }
     if (isLegadoTextHref(chapterHref)) {
       const cacheKey = `chapter|${source.id}|${chapterHref}`;
       const cached = chapterCache.get(cacheKey);
