@@ -343,3 +343,5 @@ describe('爱下电子书 Legado 目录与正文', () => {
     expect(chapter.content).toContain('去乡间收集民间歌谣');
   });
 });
+
+export {};
