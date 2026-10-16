@@ -156,6 +156,47 @@ describe('GET /api/music/v2/search', () => {
     expect(body.data.total).toBeNull();
   });
 
+  it('ranks the current song page without changing its length, total, or hasMore', async () => {
+    mockedLxGetJson.mockResolvedValue({
+      list: [
+        { id: '1', name: '周杰伦的床边故事', singer: '别人', source: 'wy' },
+        { id: '2', name: '晴天', singer: '周杰伦', source: 'wy' },
+        { id: '3', name: '周杰伦', singer: '别人', source: 'wy' },
+        { id: '4', name: '周杰伦', singer: '周杰伦', source: 'wy' },
+        ...songs(16, 'wy').map((song, index) => ({
+          ...song,
+          id: `pad-${index}`,
+          name: `填充${index}`,
+        })),
+      ],
+      total: 312,
+      allPage: 16,
+      limit: 20,
+      source: 'wy',
+    } as never);
+
+    const response = await GET(
+      searchRequest({ source: 'wy', type: 'song', page: '2', limit: '20' })
+    );
+    const body = await response.json();
+    const names = body.data.list.map(
+      (song: { name: string; artist: string }) => `${song.name}/${song.artist}`
+    );
+
+    expect(body.data.list).toHaveLength(20);
+    expect(names.slice(0, 4)).toEqual([
+      '周杰伦/周杰伦',
+      '周杰伦/别人',
+      '周杰伦的床边故事/别人',
+      '晴天/周杰伦',
+    ]);
+    expect(body.data.hasMore).toBe(true);
+    expect(body.data.total).toBe(312);
+    expect(body.data.page).toBe(2);
+    expect(body.data.limit).toBe(20);
+    expect(mockedLxGetJson).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps singer and album pagination tied to the requested limit', async () => {
     mockedLxGetJson.mockResolvedValue(
       Array.from({ length: 24 }, (_, index) => ({ id: index }))

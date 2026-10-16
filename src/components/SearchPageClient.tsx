@@ -50,6 +50,7 @@ import {
   searchListPageCount,
   searchListPageOf,
 } from '@/lib/search-list-paging';
+import { rankBySearchMatch, rankSearchGroups } from '@/lib/search-match';
 import {
   groupSearchResults,
   pickGroupDisplay,
@@ -350,25 +351,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     alt: string;
   } | null>(null);
 
-  // 在“无排序”场景用于每个源批次的预排序：完全匹配标题优先，其次年份倒序，未知年份最后
-  const sortBatchForNoOrder = (items: SearchResult[]) => {
-    const q = currentQueryRef.current.trim();
-    return items.slice().sort((a, b) => {
-      const aExact = (a.title || '').trim() === q;
-      const bExact = (b.title || '').trim() === q;
-      if (aExact && !bExact) return -1;
-      if (!aExact && bExact) return 1;
-
-      const aNum = Number.parseInt(a.year as any, 10);
-      const bNum = Number.parseInt(b.year as any, 10);
-      const aValid = !Number.isNaN(aNum);
-      const bValid = !Number.isNaN(bNum);
-      if (aValid && !bValid) return -1;
-      if (!aValid && bValid) return 1;
-      if (aValid && bValid) return bNum - aNum; // 年份倒序
-      return 0;
-    });
-  };
+  const videoTitle = (item: SearchResult) => item.title || '';
 
   // 简化的年份排序：unknown/空值始终在最后
   const compareYear = (
@@ -682,29 +665,18 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
       return true;
     });
 
-    // 如果是无排序状态，直接返回过滤后的原始顺序
     if (yearOrder === 'none') {
-      return filtered;
+      return rankBySearchMatch(filtered, submittedSearchQuery, videoTitle);
     }
 
-    // 简化排序：1. 年份排序，2. 年份相同时精确匹配在前，3. 标题排序
-    return filtered.sort((a, b) => {
-      // 首先按年份排序
-      const yearComp = compareYear(a.year, b.year, yearOrder);
-      if (yearComp !== 0) return yearComp;
-
-      // 年份相同时，精确匹配在前
-      const aExactMatch = a.title === searchQuery.trim();
-      const bExactMatch = b.title === searchQuery.trim();
-      if (aExactMatch && !bExactMatch) return -1;
-      if (!aExactMatch && bExactMatch) return 1;
-
-      // 最后按标题排序，正序时字母序，倒序时反字母序
-      return yearOrder === 'asc'
-        ? a.title.localeCompare(b.title)
-        : b.title.localeCompare(a.title);
+    return rankBySearchMatch(filtered, submittedSearchQuery, videoTitle, {
+      compareBefore: (left, right) => compareYear(left.year, right.year, yearOrder),
+      compareAfter: (left, right) =>
+        yearOrder === 'asc'
+          ? videoTitle(left).localeCompare(videoTitle(right))
+          : videoTitle(right).localeCompare(videoTitle(left)),
     });
-  }, [allExactSearchResults, filterAll, searchQuery]);
+  }, [allExactSearchResults, filterAll, submittedSearchQuery]);
 
   // 聚合：应用筛选与排序
   const filteredAggResults = useMemo(() => {
@@ -720,33 +692,31 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
       return true;
     });
 
-    // 如果是无排序状态，保持按关键字+年份+类型出现的原始顺序
     if (yearOrder === 'none') {
-      return filtered;
+      return rankSearchGroups(filtered, submittedSearchQuery, videoTitle);
     }
 
-    // 简化排序：1. 年份排序，2. 年份相同时精确匹配在前，3. 标题排序
-    return filtered.sort((a, b) => {
-      // 首先按年份排序
-      const aYear = a[1][0].year;
-      const bYear = b[1][0].year;
-      const yearComp = compareYear(aYear, bYear, yearOrder);
-      if (yearComp !== 0) return yearComp;
-
-      // 年份相同时，精确匹配在前
-      const aExactMatch = a[1][0].title === searchQuery.trim();
-      const bExactMatch = b[1][0].title === searchQuery.trim();
-      if (aExactMatch && !bExactMatch) return -1;
-      if (!aExactMatch && bExactMatch) return 1;
-
-      // 最后按标题排序，正序时字母序，倒序时反字母序
-      const aTitle = a[1][0].title;
-      const bTitle = b[1][0].title;
-      return yearOrder === 'asc'
-        ? aTitle.localeCompare(bTitle)
-        : bTitle.localeCompare(aTitle);
-    });
-  }, [aggregatedResults, filterAgg, searchQuery]);
+    const prepared = filtered.map(([key, group]) => ({
+      key,
+      year: group[0]?.year || 'unknown',
+      items: rankBySearchMatch(group, submittedSearchQuery, videoTitle),
+    }));
+    return rankBySearchMatch(
+      prepared,
+      submittedSearchQuery,
+      (entry) => entry.items[0]?.title || '',
+      {
+        compareBefore: (left, right) => compareYear(left.year, right.year, yearOrder),
+        compareAfter: (left, right) => {
+          const leftTitle = left.items[0]?.title || '';
+          const rightTitle = right.items[0]?.title || '';
+          return yearOrder === 'asc'
+            ? leftTitle.localeCompare(rightTitle)
+            : rightTitle.localeCompare(leftTitle);
+        },
+      }
+    ).map((entry) => [entry.key, entry.items] as [string, SearchResult[]]);
+  }, [aggregatedResults, filterAgg, submittedSearchQuery]);
 
   const resultItems =
     viewMode === 'agg' ? filteredAggResults : filteredAllResults;
@@ -1432,15 +1402,8 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                   Array.isArray(payload.results) &&
                   payload.results.length > 0
                 ) {
-                  // 缓冲新增结果，节流刷入，避免频繁重渲染导致闪烁
-                  const activeYearOrder =
-                    viewMode === 'agg'
-                      ? filterAgg.yearOrder
-                      : filterAll.yearOrder;
-                  const incoming: SearchResult[] =
-                    activeYearOrder === 'none'
-                      ? sortBatchForNoOrder(payload.results as SearchResult[])
-                      : (payload.results as SearchResult[]);
+                  // 缓冲新增结果，节流刷入。展示层按当前全量重排，精确匹配随到随顶。
+                  const incoming = payload.results as SearchResult[];
                   pendingResultsRef.current.push(...incoming);
                   if (!flushTimerRef.current) {
                     flushTimerRef.current = window.setTimeout(() => {
@@ -1527,12 +1490,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
             if (currentQueryRef.current !== trimmed) return;
 
             if (data.results && Array.isArray(data.results)) {
-              const activeYearOrder =
-                viewMode === 'agg' ? filterAgg.yearOrder : filterAll.yearOrder;
-              const results: SearchResult[] =
-                activeYearOrder === 'none'
-                  ? sortBatchForNoOrder(data.results as SearchResult[])
-                  : (data.results as SearchResult[]);
+              const results = data.results as SearchResult[];
 
               setSearchResults(results);
               // 缓存搜索结果

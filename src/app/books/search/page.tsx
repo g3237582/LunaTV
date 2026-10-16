@@ -20,6 +20,7 @@ import {
 import { BOOK_SOURCE_CHIP_LIMIT } from '@/lib/book-source-summary';
 import { cn } from '@/lib/cn';
 import { sliceMusicPage } from '@/lib/music-page-data';
+import { rankBySearchMatch } from '@/lib/search-match';
 
 import { bookCardItem } from '@/components/media/adapters';
 import EmptyState from '@/components/media/EmptyState';
@@ -77,6 +78,7 @@ export default function BooksSearchPage() {
   // 不能直接拿下拉框的值：下拉框是下一次搜索的参数，它一变就改写标注的话，
   // 标注会和下面那批书对不上（下拉切到 A，展示的还是 B 的结果）。
   const [executedScope, setExecutedScope] = useState('');
+  const [executedQuery, setExecutedQuery] = useState(urlQuery);
   const [totalSources, setTotalSources] = useState(0);
   const [completedSources, setCompletedSources] = useState(0);
   const [useFluidSearch, setUseFluidSearch] = useState(true);
@@ -223,6 +225,7 @@ export default function BooksSearchPage() {
       closeEventSource();
       clearPendingResults();
       currentSearchKeyRef.current = searchKey;
+      setExecutedQuery(trimmed);
       setLoading(true);
       setError('');
       setHasSearched(true);
@@ -449,6 +452,7 @@ export default function BooksSearchPage() {
           setResult(cachedState.result || EMPTY_RESULT);
           setHasSearched(true);
           setExecutedScope(cachedState.sourceId || '');
+          setExecutedQuery(cachedState.q.trim());
         }
         return;
       }
@@ -463,6 +467,7 @@ export default function BooksSearchPage() {
       setLoading(false);
       setHasSearched(false);
       setExecutedScope('');
+      setExecutedQuery('');
       setTotalSources(0);
       setCompletedSources(0);
       setError('');
@@ -509,6 +514,17 @@ export default function BooksSearchPage() {
     if (sources.length === 0) return '全部书源';
     return `全部书源 · ${sources.length} 个书源`;
   }, [executedScope, sources]);
+
+  const rankedResults = useMemo(
+    () =>
+      rankBySearchMatch(
+        result.results,
+        executedQuery,
+        (item) => item.title || item.name || '',
+        { getTiebreak: (item) => item.author }
+      ),
+    [executedQuery, result.results]
+  );
 
   const searchProgress =
     totalSources > 0
@@ -681,7 +697,7 @@ export default function BooksSearchPage() {
 
         {result.results.length > 0 ? (
           <MediaGrid>
-            {sliceMusicPage(result.results, page).items.map((item) => (
+            {sliceMusicPage(rankedResults, page).items.map((item) => (
               <MediaCard
                 key={`${item.sourceId}-${item.id}`}
                 item={bookCardItem(item)}
