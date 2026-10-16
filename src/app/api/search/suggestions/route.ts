@@ -6,6 +6,7 @@ import { AdminConfig } from '@/lib/admin.types';
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getAvailableApiSites, getConfig } from '@/lib/config';
 import { searchFromApi } from '@/lib/downstream';
+import { rejectUnauthorizedSpecialSearch } from '@/lib/special-source-api';
 import { yellowWords } from '@/lib/yellow';
 
 export const runtime = 'nodejs';
@@ -21,16 +22,41 @@ export async function GET(request: NextRequest) {
     const config = await getConfig();
     const { searchParams } = new URL(request.url);
     const query = searchParams.get('q')?.trim();
+    const specialOnly = searchParams.get('special') === '1';
+
+    const specialRejection = await rejectUnauthorizedSpecialSearch(
+      authInfo.username,
+      specialOnly
+    );
+    if (specialRejection) return specialRejection;
 
     if (!query) {
+      if (specialOnly) {
+        return NextResponse.json(
+          { suggestions: [] },
+          { headers: { 'Cache-Control': 'private, no-store' } }
+        );
+      }
       return NextResponse.json({ suggestions: [] });
     }
 
-    // 生成建议
-    const suggestions = await generateSuggestions(config, query, authInfo.username);
+    // 生成建议。特殊源只取特殊采集源，且不写入搜索历史。
+    const suggestions = await generateSuggestions(
+      config,
+      query,
+      authInfo.username,
+      specialOnly
+    );
 
     // 从配置中获取缓存时间，如果没有配置则使用默认值300秒（5分钟）
     const cacheTime = config.SiteConfig.SiteInterfaceCacheTime || 300;
+
+    if (specialOnly) {
+      return NextResponse.json(
+        { suggestions },
+        { headers: { 'Cache-Control': 'private, no-store' } }
+      );
+    }
 
     return NextResponse.json(
       { suggestions },
@@ -49,7 +75,12 @@ export async function GET(request: NextRequest) {
   }
 }
 
-async function generateSuggestions(config: AdminConfig, query: string, username: string): Promise<
+async function generateSuggestions(
+  config: AdminConfig,
+  query: string,
+  username: string,
+  specialOnly = false
+): Promise<
   Array<{
     text: string;
     type: 'exact' | 'related' | 'suggestion';
@@ -58,7 +89,7 @@ async function generateSuggestions(config: AdminConfig, query: string, username:
 > {
   const queryLower = query.toLowerCase();
 
-  const apiSites = await getAvailableApiSites(username);
+  const apiSites = await getAvailableApiSites(username, specialOnly);
   let realKeywords: string[] = [];
 
   if (apiSites.length > 0) {

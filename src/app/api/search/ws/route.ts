@@ -6,6 +6,7 @@ import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getAvailableApiSites, getConfig } from '@/lib/config';
 import { searchFromApi } from '@/lib/downstream';
 import { hasFeaturePermission } from '@/lib/permissions';
+import { rejectUnauthorizedSpecialSearch } from '@/lib/special-source-api';
 import { yellowWords } from '@/lib/yellow';
 import { getProxyToken } from '@/lib/emby-token';
 import {
@@ -27,6 +28,13 @@ export async function GET(request: NextRequest) {
   const query = searchParams.get('q');
   const specialOnly = searchParams.get('special') === '1';
   const privateOnly = searchParams.get('privateOnly') === '1';
+
+  // 无权限时直接 403 JSON，不打开 SSE。本接口不写搜索历史。
+  const specialRejection = await rejectUnauthorizedSpecialSearch(
+    authInfo.username,
+    specialOnly
+  );
+  if (specialRejection) return specialRejection;
 
   if (!query) {
     return new Response(
@@ -82,7 +90,8 @@ export async function GET(request: NextRequest) {
     config.EmbyConfig.Sources.length > 0 &&
     config.EmbyConfig.Sources.some(s => s.enabled && s.ServerURL)
   );
-  const enabledScripts = privateOnly ? [] : await listEnabledSourceScripts();
+  // 特殊源搜索只用特殊采集源，不混入脚本源或私人影库。
+  const enabledScripts = privateOnly || specialOnly ? [] : await listEnabledSourceScripts();
 
   // 共享状态
   let streamClosed = false;

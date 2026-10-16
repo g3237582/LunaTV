@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { db } from '@/lib/db';
+import { shouldOmitSpecialSearchFromSharedHistory } from '@/lib/special-source-api';
 
 export const runtime = 'nodejs';
 
@@ -75,6 +76,19 @@ export async function POST(request: NextRequest) {
         { error: 'Keyword is required' },
         { status: 400 }
       );
+    }
+
+    // 特殊源关键词默认不进普通历史，避免随后被推荐或普通搜索页读到。
+    if (
+      shouldOmitSpecialSearchFromSharedHistory({
+        bodySpecial: body?.special,
+        querySpecial: new URL(request.url).searchParams.get('special'),
+      })
+    ) {
+      const history = await db.getSearchHistory(authInfo.username);
+      return NextResponse.json(history.slice(0, HISTORY_LIMIT), {
+        status: 200,
+      });
     }
 
     await db.addSearchHistory(authInfo.username, keyword);
