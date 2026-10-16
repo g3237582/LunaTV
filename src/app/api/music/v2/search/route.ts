@@ -2,7 +2,22 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { isMusicSource, lxGetJson, LxServerSong, normalizeLxSong } from '@/lib/music-v2';
 import { badRequest, internalError } from '@/lib/music-v2-api';
+import { rankBySearchMatch } from '@/lib/search-match';
 import { musicSearchHasMore, readLxSearchResult } from '@/lib/search-list-paging';
+
+function musicSearchTitle(item: unknown): string {
+  if (!item || typeof item !== 'object') return '';
+  const record = item as Record<string, unknown>;
+  const name = record.name ?? record.title;
+  return typeof name === 'string' ? name : '';
+}
+
+function musicSearchArtist(item: unknown): string | undefined {
+  if (!item || typeof item !== 'object') return undefined;
+  const record = item as Record<string, unknown>;
+  const artist = record.artist ?? record.singer ?? record.artistName;
+  return typeof artist === 'string' ? artist : undefined;
+}
 
 export const runtime = 'nodejs';
 
@@ -24,12 +39,20 @@ export async function GET(request: NextRequest) {
 
     const payload = await lxGetJson<unknown>(`/api/music/search?name=${encodeURIComponent(q)}&source=${source}&type=${type}&page=${page}&limit=${limit}`, 'none');
     const { list, total } = readLxSearchResult(payload, source);
+    // 只重排当前页。页大小、total、hasMore 仍按上游原列表计算。
+    const pageItems = type === 'song' ? (list as LxServerSong[]).map(normalizeLxSong) : list;
+    const ranked = rankBySearchMatch(
+      pageItems,
+      q,
+      musicSearchTitle,
+      type === 'song' ? { getTiebreak: musicSearchArtist } : undefined
+    );
 
     return NextResponse.json(
       {
         success: true,
         data: {
-          list: type === 'song' ? (list as LxServerSong[]).map(normalizeLxSong) : list,
+          list: ranked,
           type,
           page,
           limit,

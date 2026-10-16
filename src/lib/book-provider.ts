@@ -11,6 +11,7 @@ import {
 import { assertChaptersSupported, bookSourceKind } from './book-chapters';
 import { legadoClient } from './legado.client';
 import { opdsClient } from './opds.client';
+import { rankBySearchMatch } from './search-match';
 
 function sourceKind(source?: Pick<BookSource, 'type' | 'legado'>) {
   return bookSourceKind(source);
@@ -62,7 +63,15 @@ export class BookProvider {
         failedSources.push({ sourceId: source.id, sourceName: source.name, error: (error as Error).message });
       }
     }));
-    return { results, failedSources };
+    return {
+      results: rankBySearchMatch(
+        results,
+        q,
+        (item) => item.title || item.name || '',
+        { getTiebreak: (item) => item.author }
+      ),
+      failedSources,
+    };
   }
 
   async getBookDetail(sourceId: string, href: string, fallback?: Partial<BookDetail>): Promise<BookDetail> {

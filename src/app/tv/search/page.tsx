@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { addSearchHistory, getSearchHistory } from '@/lib/db.client';
+import { rankBySearchMatch } from '@/lib/search-match';
 import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 
@@ -120,7 +121,9 @@ export default function TVSearchPage() {
     const groups = new Map<string, SearchResult[]>();
     const order: string[] = [];
 
-    results.forEach((item) => {
+    const ranked = rankBySearchMatch(results, searched, (item) => item.title || '');
+
+    ranked.forEach((item) => {
       const key = `${normalizeTitle(item.title)}-${getResultType(item)}-${getValidYear(item)}`;
       if (!groups.has(key)) {
         groups.set(key, []);
@@ -150,7 +153,7 @@ export default function TVSearchPage() {
         isAggregate: group.length > 1,
       };
     });
-  }, [results]);
+  }, [results, searched]);
 
   useEffect(() => {
     if (loading || error || displayResults.length === 0) return;

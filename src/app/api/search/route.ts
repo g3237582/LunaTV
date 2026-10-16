@@ -7,6 +7,7 @@ import { getAvailableApiSites, getCacheTime, getConfig } from '@/lib/config';
 import { searchFromApi } from '@/lib/downstream';
 import { getProxyToken } from '@/lib/emby-token';
 import { hasFeaturePermission } from '@/lib/permissions';
+import { rankBySearchMatch } from '@/lib/search-match';
 import {
   executeSavedSourceScript,
   listEnabledSourceScripts,
@@ -281,12 +282,17 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // 按权重降序排序
+    // 先按来源权重降序，再按标题匹配档稳定重排。同一档里仍保持权重顺序。
     flattenedResults.sort((a, b) => {
       const weightA = a.weight ?? 0;
       const weightB = b.weight ?? 0;
       return weightB - weightA;
     });
+    flattenedResults = rankBySearchMatch(
+      flattenedResults,
+      query,
+      (result) => result.title || ''
+    );
 
     const cacheTime = await getCacheTime();
 
