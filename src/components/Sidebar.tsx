@@ -14,7 +14,10 @@ import {
   useState,
 } from 'react';
 
-import { SPECIAL_SOURCE_PATH } from '@/lib/special-source.client';
+import {
+  isSpecialSourceLocation,
+  SPECIAL_SOURCE_PATH,
+} from '@/lib/special-source.client';
 
 import { useSite } from './SiteProvider';
 import { useWatchRoomContextSafe } from './WatchRoomProvider';
@@ -127,11 +130,10 @@ const Sidebar = ({ onToggle, activePath = '/' }: SidebarProps) => {
     isCollapsed,
   };
 
-  // /under 下的「搜索」留在特殊源入口，避免一点就跳回普通搜索
-  const isUnderPath =
-    pathname === SPECIAL_SOURCE_PATH ||
-    pathname.startsWith(`${SPECIAL_SOURCE_PATH}/`);
-  const searchHref = isUnderPath ? SPECIAL_SOURCE_PATH : '/search';
+  // 特殊源不单独占导航。搜索链接在特殊源上下文（/under 或 special=1）里留在 /under
+  const searchHref = isSpecialSourceLocation(pathname, searchParams.toString())
+    ? SPECIAL_SOURCE_PATH
+    : '/search';
 
   const [menuItems, setMenuItems] = useState([
     {
@@ -268,7 +270,7 @@ const Sidebar = ({ onToggle, activePath = '/' }: SidebarProps) => {
       });
     }
 
-    // 特殊源入口不在导航展示，只能手动访问 /under
+    // 特殊源不单独占导航项，入口在搜索页的「特殊源」切换
 
     setMenuItems(items);
   }, [watchRoomContext?.isEnabled]);

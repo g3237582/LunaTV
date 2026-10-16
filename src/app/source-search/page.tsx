@@ -2,7 +2,7 @@
 'use client';
 
 import { ChevronUp, Loader2, Search } from 'lucide-react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Suspense,
   useCallback,
@@ -27,12 +27,17 @@ import {
   rememberListScroll,
   takeListScroll,
 } from '@/lib/list-return-state';
+import {
+  activateSpecialSourceDeviceGate,
+  buildSourceSearchModeHref,
+} from '@/lib/special-source-entry';
 import { appendSpecialSourceParam } from '@/lib/special-source.client';
 import { SearchResult } from '@/lib/types';
 import { useSyncListPage } from '@/hooks/useSyncListPage';
 
 import CapsuleSwitch from '@/components/CapsuleSwitch';
 import PageLayout from '@/components/PageLayout';
+import SpecialSourceModeSwitch from '@/components/SpecialSourceModeSwitch';
 import VideoCard from '@/components/VideoCard';
 
 type Category = CategoryNode;
@@ -95,6 +100,7 @@ const consumeSnapshot = (): SourceSearchSnapshot | null => {
 
 function SourceSearchPageClient() {
   // special=1 表示这是从 /under 进入的特殊源版本：源列表只有特殊源
+  const router = useRouter();
   const searchParams = useSearchParams();
   const isSpecialVersion = searchParams.get('special') === '1';
   const [apiSites, setApiSites] = useState<ApiSite[]>([]);
@@ -161,9 +167,14 @@ function SourceSearchPageClient() {
       setSearchKeyword(snapshot.searchKeyword);
       setSearchInputValue(snapshot.searchInputValue);
     } else if (typeof window !== 'undefined') {
-      const urlPage = readListPage(
-        new URLSearchParams(window.location.search).get('page')
-      );
+      const params = new URLSearchParams(window.location.search);
+      const keyword = params.get('keyword')?.trim() || '';
+      if (keyword) {
+        setSearchKeyword(keyword);
+        setSearchInputValue(keyword);
+        setViewMode('search');
+      }
+      const urlPage = readListPage(params.get('page'));
       const savedScroll = takeListScroll(
         window.sessionStorage,
         window.location.pathname,
@@ -285,15 +296,19 @@ function SourceSearchPageClient() {
     }
 
     const fetchCategories = async () => {
+      // 带关键词进入（普通源/特殊源切换）时不要清掉即将开始的搜索
+      const searching = viewMode === 'search';
       setIsLoadingCategories(true);
-      setCategories([]);
-      setSelectedParentCategory('');
-      setSelectedCategory('');
-      setVideos([]);
-      if (!backfillToRef.current) {
-        setCurrentPage(1);
+      if (!searching) {
+        setCategories([]);
+        setSelectedParentCategory('');
+        setSelectedCategory('');
+        setVideos([]);
+        if (!backfillToRef.current) {
+          setCurrentPage(1);
+        }
+        setHasMore(true);
       }
-      setHasMore(true);
       try {
         const response = await fetch(
           appendSpecialSourceParam(`/api/source-search/categories?source=${encodeURIComponent(selectedSource)}`)
@@ -507,6 +522,14 @@ function SourceSearchPageClient() {
     };
   }, []);
 
+  const handleSpecialSourceModeChange = (next: 'normal' | 'special') => {
+    const special = next === 'special';
+    if (special === isSpecialVersion) return;
+    if (special) activateSpecialSourceDeviceGate();
+    const keyword = (searchInputValue || searchKeyword).trim();
+    router.push(buildSourceSearchModeHref({ special, keyword }));
+  };
+
   // 返回顶部
   const scrollToTop = () => {
     try {
@@ -552,6 +575,10 @@ function SourceSearchPageClient() {
               ? '仅浏览与搜索特殊源的内容'
               : '根据可用视频源浏览分类内容'}
           </p>
+          <SpecialSourceModeSwitch
+            active={isSpecialVersion ? 'special' : 'normal'}
+            onChange={handleSpecialSourceModeChange}
+          />
         </div>
 
         {/* 源选择和分类选择 */}
@@ -830,10 +857,17 @@ function SourceSearchPageClient() {
   );
 }
 
+function SourceSearchModeBoundary() {
+  const searchParams = useSearchParams();
+  // 换模式时重挂，避免普通源的选中状态留在特殊源列表里
+  const mode = searchParams.get('special') === '1' ? 'special' : 'normal';
+  return <SourceSearchPageClient key={mode} />;
+}
+
 export default function SourceSearchPage() {
   return (
     <Suspense>
-      <SourceSearchPageClient />
+      <SourceSearchModeBoundary />
     </Suspense>
   );
 }

@@ -26,20 +26,30 @@ export function setSpecialSourceEnabledOnDevice(enabled: boolean) {
 }
 
 /**
- * 是否处于特殊源（/under）上下文。
- * 判定依据是当前路径，与开关无关：/under 下只出特殊源，其余路径只出普通源。
- * 从 /under 跳出去的页面（如 /play）靠 special=1 查询参数延续上下文。
+ * 是否处于特殊源上下文。
+ * 判定依据是路径，与开关无关：/under 下只出特殊源，其余路径只出普通源。
+ * 从 /under 跳出去的页面（如 /play、源站寻片）靠 special=1 延续上下文。
  */
-export function isSpecialSourceContext(): boolean {
-  if (typeof window === 'undefined') return false;
-  const { pathname, search } = window.location;
+export function isSpecialSourceLocation(
+  pathname: string,
+  search: string
+): boolean {
   if (
     pathname === SPECIAL_SOURCE_PATH ||
     pathname.startsWith(`${SPECIAL_SOURCE_PATH}/`)
   ) {
     return true;
   }
-  return new URLSearchParams(search).get('special') === '1';
+  const query = search.startsWith('?') ? search.slice(1) : search;
+  return new URLSearchParams(query).get('special') === '1';
+}
+
+export function isSpecialSourceContext(): boolean {
+  if (typeof window === 'undefined') return false;
+  return isSpecialSourceLocation(
+    window.location.pathname,
+    window.location.search
+  );
 }
 
 export function appendSpecialSourceParam(url: string): string {
