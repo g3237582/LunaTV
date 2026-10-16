@@ -56,6 +56,11 @@ import {
   pickGroupDisplay,
 } from '@/lib/search-result-aggregator';
 import {
+  activateSpecialSourceDeviceGate,
+  buildNormalVideoSearchHref,
+  buildSpecialVideoSearchHref,
+} from '@/lib/special-source-entry';
+import {
   appendSpecialSourceParam,
   isSpecialSourceContext,
   SPECIAL_SOURCE_PATH,
@@ -76,6 +81,7 @@ import SearchResultFilter, {
   SearchFilterCategory,
 } from '@/components/SearchResultFilter';
 import SearchSuggestions from '@/components/SearchSuggestions';
+import SpecialSourceModeSwitch from '@/components/SpecialSourceModeSwitch';
 import VideoCard, { VideoCardHandle } from '@/components/VideoCard';
 import VirtualScrollableGrid from '@/components/VirtualScrollableGrid';
 
@@ -1798,6 +1804,19 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     }
   };
 
+  // 普通源 <-> 特殊源。关键词跟着走；进 /under 前先打开本机开关，否则服务端 404。
+  const handleSpecialSourceModeChange = (next: 'normal' | 'special') => {
+    const query = (searchParams.get('q') || searchQuery).trim();
+    if (next === 'special') {
+      if (isSpecialEntry) return;
+      activateSpecialSourceDeviceGate();
+      router.push(buildSpecialVideoSearchHref(query));
+      return;
+    }
+    if (!isSpecialEntry) return;
+    router.push(buildNormalVideoSearchHref(query));
+  };
+
   // 处理标签切换
   const handleTabChange = (newTab: 'video' | 'pansou' | 'acg') => {
     setActiveTab(newTab);
@@ -1873,6 +1892,11 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
               />
             </div>
           </form>
+
+          <SpecialSourceModeSwitch
+            active={isSpecialEntry ? 'special' : 'normal'}
+            onChange={handleSpecialSourceModeChange}
+          />
 
           {/* 选项卡：特殊源入口（/under）只有影视搜索，整块隐藏 */}
           {!isSpecialEntry && (

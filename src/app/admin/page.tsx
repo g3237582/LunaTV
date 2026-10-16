@@ -8127,7 +8127,7 @@ const VideoSourceConfig = ({
                     特殊源设置
                   </h3>
                   <p className='mt-1 text-sm text-gray-600 dark:text-gray-400'>
-                    选中的视频源对普通搜索完全隐藏，只在 /under 入口可用；/under 也不会出现普通源。开关状态见 /sp。
+                    选中的视频源对普通搜索完全隐藏。已登录且用户组允许的用户，可在搜索页切换「特殊源」，或从 /under 进入；普通入口不会出现这些源，特殊入口也不会出现普通源。本机开关见 /sp。
                   </p>
                 </div>
                 <button

@@ -11,6 +11,7 @@ import { getConfig } from '@/lib/config';
 import { getUserFeatureAccess } from '@/lib/permissions';
 import { getCurrentSite, getPeerSite } from '@/lib/site-context';
 import { listEnabledSourceScripts } from '@/lib/source-script';
+import { resolveSpecialSourceSearchEnabled } from '@/lib/special-source-access';
 
 import { StartupCacheCleanup } from '../components/DanmakuCacheCleanup';
 import { DownloadBubble } from '../components/DownloadBubble';
@@ -146,6 +147,25 @@ export default async function RootLayout({
   // 入口开关是本机 cookie，与存储模式无关，所以 localstorage 模式也要注入；
   // getConfig() 有模块级缓存，generateMetadata 里已经调过一次，这里不产生额外读取。
   const specialSourceApis = (await getConfig()).SpecialSourceApis || [];
+  let specialSourceSearchEnabled = false;
+  if (specialSourceApis.length > 0) {
+    const specialCookieStore = await cookies();
+    const specialSite = getCurrentSite();
+    const specialAuth = parseAuthInfo(
+      specialCookieStore.get(specialSite.authCookieName)?.value ||
+        (getPeerSite(specialSite.id)
+          ? undefined
+          : specialCookieStore.get('auth')?.value)
+    );
+    try {
+      specialSourceSearchEnabled = await resolveSpecialSourceSearchEnabled(
+        specialAuth?.username
+      );
+    } catch {
+      // 判定失败时隐藏入口，避免用户组查询异常把整站布局打挂
+      specialSourceSearchEnabled = false;
+    }
+  }
   let userFeatureAccess =
     storageType === 'localstorage'
       ? await getUserFeatureAccess(process.env.USERNAME || 'localstorage-owner')
@@ -378,6 +398,7 @@ export default async function RootLayout({
     SITE_ID: getCurrentSite().id,
     AUTH_COOKIE_NAME: getCurrentSite().authCookieName,
     SPECIAL_SOURCE_APIS: specialSourceApis,
+    SPECIAL_SOURCE_SEARCH_ENABLED: specialSourceSearchEnabled,
     RATE_BADGE_STYLE: rateBadgeStyle,
   };
 
