@@ -79,6 +79,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/server.js ./server.js
 # 因此需要显式复制该运行时模块，避免生产镜像启动时报 Cannot find module。
 COPY --from=builder --chown=nextjs:nodejs /app/src/lib/tv-remote-hub.js ./src/lib/tv-remote-hub.js
 COPY --from=builder --chown=nextjs:nodejs /app/src/lib/site-runtime.js ./src/lib/site-runtime.js
+# start.js / server.js 会在进程启动时加载日志打码，standalone 追踪不到这个 require。
+COPY --from=builder --chown=nextjs:nodejs /app/src/lib/redact-secrets.js ./src/lib/redact-secrets.js
 # 从构建器中复制 public 和 .next/static 目录
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static

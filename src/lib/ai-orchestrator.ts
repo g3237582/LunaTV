@@ -4,10 +4,12 @@
  * 负责协调AI与联网搜索、豆瓣API、TMDB API之间的数据交互
  */
 
+import { parseStringPromise } from 'xml2js';
+
 import { fetchDoubanData as fetchDoubanAPI } from '@/lib/douban';
+import { redactForLog } from '@/lib/redact-secrets';
 import { getNextApiKey } from '@/lib/tmdb.client';
 import { normalizeApiBaseUrl } from '@/lib/url';
-import { parseStringPromise } from 'xml2js';
 
 export interface VideoContext {
   title?: string;
@@ -214,7 +216,7 @@ export async function fetchWebSearch(
       };
     }
   } catch (error) {
-    console.error('Web search error:', error);
+    console.error('Web search error:', redactForLog(error));
     return null;
   }
 }
@@ -312,7 +314,7 @@ export async function fetchTMDBData(
 
     return await response.json();
   } catch (error) {
-    console.error('❌ TMDB数据获取失败:', error);
+    console.error('❌ TMDB数据获取失败:', redactForLog(error));
     return null;
   }
 }

@@ -2,14 +2,13 @@
 
 import {
   LayoutGrid,
-  List as ListIcon,
   Link as LinkIcon,
+  List as ListIcon,
   MoreVertical,
   Settings,
   Wand2,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { createPortal } from 'react-dom';
 import React, {
   useCallback,
   useEffect,
@@ -17,21 +16,30 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 
 import type { DanmakuComment,DanmakuEpisode,DanmakuSelection } from '@/lib/danmaku/types';
 import { generateStorageKey, getCachedPlayRecordsSnapshot } from '@/lib/db.client';
 import { isEpisodeHiddenByFilter } from '@/lib/episode-filter';
 import { loadAllLocalEpisodeProgressRecords } from '@/lib/episode-progress';
 import { isNetdiskSource } from '@/lib/netdisk/source';
+import {
+  DEFAULT_PANEL_SPEED_TEST_TIMEOUT_MS,
+  prepareSpeedTestEpisodeUrl,
+  readStoredSpeedTestTimeoutMs,
+  resolveSpeedTestTimeoutMs,
+  sourceNeedsLongerSpeedTest,
+  SPEED_TEST_SLOW_LABEL,
+} from '@/lib/speed-test';
 import { EpisodeFilterConfig,SearchResult } from '@/lib/types';
-import { getVideoResolutionFromM3u8, SpeedTestError } from '@/lib/utils';
 import type { SpeedTestErrorType } from '@/lib/utils';
+import { getVideoResolutionFromM3u8, SpeedTestError } from '@/lib/utils';
+import { useLongPress } from '@/hooks/useLongPress';
 
 import DanmakuPanel from '@/components/DanmakuPanel';
 import EpisodeFilterSettings from '@/components/EpisodeFilterSettings';
 import EpisodeTitleCorrectDialog from '@/components/EpisodeTitleCorrectDialog';
 import ProxyImage from '@/components/ProxyImage';
-import { useLongPress } from '@/hooks/useLongPress';
 
 /** 选集按钮上显示的短标签（数字等）；全名仍保留在 originalTitle 供长按查看 */
 function getEpisodeDisplayLabel(
@@ -613,17 +621,6 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     return true;
   });
 
-  // 读取测速超时设置，默认4秒
-  const [speedTestTimeout] = useState<number>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('speedTestTimeout');
-      if (saved !== null) {
-        return Number(saved);
-      }
-    }
-    return 4000;
-  });
-
   // 集数过滤逻辑
   const isEpisodeFiltered = useCallback(
     (episodeNumber: number): boolean => {
@@ -671,14 +668,27 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     if (!source.episodes || source.episodes.length === 0) {
       return;
     }
-    const episodeUrl =
+    const rawEpisodeUrl =
       source.episodes.length > 1 ? source.episodes[1] : source.episodes[0];
+    const episodeUrl = prepareSpeedTestEpisodeUrl({
+      episodeUrl: rawEpisodeUrl,
+      source: source.source,
+      proxyMode: source.proxyMode,
+      proxyToken: process.env.NEXT_PUBLIC_PROXY_M3U8_TOKEN || '',
+    });
 
     // 标记为已尝试
     setAttemptedSources((prev) => new Set(prev).add(sourceKey));
 
     try {
-      const info = await getVideoResolutionFromM3u8(episodeUrl, speedTestTimeout);
+      const info = await getVideoResolutionFromM3u8(
+        episodeUrl,
+        resolveSpeedTestTimeoutMs({
+          storedMs: readStoredSpeedTestTimeoutMs(),
+          fallbackMs: DEFAULT_PANEL_SPEED_TEST_TIMEOUT_MS,
+          special: sourceNeedsLongerSpeedTest(source.source),
+        })
+      );
       setVideoInfoMap((prev) => new Map(prev).set(sourceKey, info));
     } catch (error) {
       // 失败时保存错误状态，并区分超时与无法访问
@@ -695,7 +705,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
         })
       );
     }
-  }, [speedTestTimeout]);
+  }, []);
 
   // 重测所有源的函数
   const retestAllSources = useCallback(async () => {
@@ -1434,6 +1444,19 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                               const sourceKey = `${source.source}-${source.id}`;
                               const videoInfo = videoInfoMap.get(sourceKey);
 
+                              if (
+                                videoInfo &&
+                                !videoInfo.hasError &&
+                                videoInfo.quality === '未知' &&
+                                videoInfo.loadSpeed === SPEED_TEST_SLOW_LABEL
+                              ) {
+                                return (
+                                  <div className='bg-gray-500/10 dark:bg-gray-400/20 text-amber-600 dark:text-amber-400 px-1.5 py-0 rounded text-xs flex-shrink-0 min-w-[50px] text-center'>
+                                    慢
+                                  </div>
+                                );
+                              }
+
                               if (videoInfo && videoInfo.quality !== '未知') {
                                 if (videoInfo.hasError) {
                                   return (
@@ -1495,9 +1518,17 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                                 const videoInfo = videoInfoMap.get(sourceKey);
                                 if (videoInfo) {
                                   if (!videoInfo.hasError) {
+                                    const speedIsSlow =
+                                      videoInfo.loadSpeed === SPEED_TEST_SLOW_LABEL;
                                     return (
                                       <div className='flex items-end gap-3 text-xs'>
-                                        <div className='text-green-600 dark:text-green-400 font-medium text-xs'>
+                                        <div
+                                          className={`font-medium text-xs ${
+                                            speedIsSlow
+                                              ? 'text-amber-600 dark:text-amber-400'
+                                              : 'text-green-600 dark:text-green-400'
+                                          }`}
+                                        >
                                           {videoInfo.loadSpeed}
                                         </div>
                                         <div className='text-orange-600 dark:text-orange-400 font-medium text-xs'>

@@ -2,6 +2,10 @@
 import bs58 from 'bs58';
 import he from 'he';
 
+import {
+  buildSpeedTestHlsConfig,
+  decideSpeedTestTimeout,
+} from './speed-test';
 import { getTmdbImageBaseUrl } from './tmdb-image-base';
 
 export type DoubanImageProxyType =
@@ -735,12 +739,17 @@ export async function getVideoResolutionFromM3u8(
           pingTime = performance.now() - pingStart; // 记录到失败为止的时间
         });
 
-      // 固定使用hls.js加载
-      const hls = new Hls();
+      // 固定使用hls.js加载。内部超时跟这次测速窗口对齐，避免 10 秒分片超时先把慢源掐死。
+      const hls = new Hls(buildSpeedTestHlsConfig(timeoutMs));
 
       let actualLoadSpeed = '未知';
       let hasSpeedCalculated = false;
       let hasMetadataLoaded = false;
+      let hasManifestLoaded = false;
+      let settled = false;
+      // 清理函数会闭包引用它，真正的定时器要等回调定义完再赋值。
+      // eslint-disable-next-line prefer-const
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
       let estimatedBitrate = 0; // 估算的码率（bps）
 
       // 提取核心返回逻辑供 resolve 和 timeout 共同调用
@@ -779,24 +788,47 @@ export async function getVideoResolutionFromM3u8(
         });
       };
 
-      // 设置超时处理 - 如果部分数据已拿到，则宽容返回
-      const timeout = setTimeout(() => {
-        if (hasMetadataLoaded || hasSpeedCalculated) {
-          resolveCurrentState();
-        } else {
-          hls.destroy();
-          video.remove();
-          reject(
-            new SpeedTestError('timeout', 'Timeout loading video metadata')
-          );
+      const settleResolve = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        resolveCurrentState();
+      };
+
+      const settleReject = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        hls.destroy();
+        video.remove();
+        reject(error);
+      };
+
+      // m3u8 已到但分片没测完：返回「慢」，不要当成源已死。
+      const resolveSlowOrRejectTimeout = () => {
+        const decision = decideSpeedTestTimeout({
+          manifestLoaded: hasManifestLoaded,
+          metadataLoaded: hasMetadataLoaded,
+          speedCalculated: hasSpeedCalculated,
+          loadSpeed: actualLoadSpeed,
+        });
+        if (decision.action === 'resolve') {
+          actualLoadSpeed = decision.loadSpeed;
+          settleResolve();
+          return;
         }
+        settleReject(
+          new SpeedTestError('timeout', 'Timeout loading video metadata')
+        );
+      };
+
+      // 设置超时处理 - 如果部分数据已拿到，则宽容返回
+      timeoutId = setTimeout(() => {
+        resolveSlowOrRejectTimeout();
       }, timeoutMs);
 
       video.onerror = () => {
-        clearTimeout(timeout);
-        hls.destroy();
-        video.remove();
-        reject(
+        settleReject(
           new SpeedTestError('unreachable', 'Failed to load video metadata')
         );
       };
@@ -809,10 +841,15 @@ export async function getVideoResolutionFromM3u8(
           hasMetadataLoaded &&
           (hasSpeedCalculated || actualLoadSpeed !== '未知')
         ) {
-          clearTimeout(timeout);
-          resolveCurrentState();
+          settleResolve();
         }
       };
+
+      const markManifestLoaded = () => {
+        hasManifestLoaded = true;
+      };
+      hls.on(Hls.Events.MANIFEST_LOADED, markManifestLoaded);
+      hls.on(Hls.Events.MANIFEST_PARSED, markManifestLoaded);
 
       // 监听片段加载开始
       hls.on(Hls.Events.FRAG_LOADING, () => {
@@ -892,7 +929,9 @@ export async function getVideoResolutionFromM3u8(
             console.log(
               '[测速] 测速通道嗅探到这是底层的媒体流文件，免测速通过'
             );
-            clearTimeout(timeout);
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
             hls.destroy();
             video.remove();
             resolve({
@@ -904,19 +943,18 @@ export async function getVideoResolutionFromM3u8(
             return;
           }
 
-          clearTimeout(timeout);
-          hls.destroy();
-          video.remove();
           // HLS 的 *TimeOut 类 details（manifestLoadTimeOut 等）归为超时，
-          // 其余致命错误（网络不可达、404、解析失败）归为无法访问
+          // 其余致命错误（网络不可达、404、解析失败）归为无法访问。
+          // 播放列表已经加载、只是分片超时：记为慢，仍然留给优选。
           const details =
             typeof data.details === 'string' ? data.details : '';
           const isTimeout = details.toLowerCase().includes('timeout');
-          reject(
-            new SpeedTestError(
-              isTimeout ? 'timeout' : 'unreachable',
-              `HLS播放失败: ${data.type}`
-            )
+          if (isTimeout) {
+            resolveSlowOrRejectTimeout();
+            return;
+          }
+          settleReject(
+            new SpeedTestError('unreachable', `HLS播放失败: ${data.type}`)
           );
         }
       });

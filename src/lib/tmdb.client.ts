@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any,no-console */
 
+import { redactForLog } from './redact-secrets';
 import { safeFetch } from './safe-http';
-
 import { getTmdbImageBaseUrl } from './tmdb-image-base';
 
 // TMDB API 默认 Base URL（不包含 /3/，由程序拼接）
@@ -142,7 +142,7 @@ export async function getTMDBUpcomingMovies(
       list: data.results,
     };
   } catch (error) {
-    console.error('获取 TMDB 即将上映电影失败:', error);
+    console.error('获取 TMDB 即将上映电影失败:', redactForLog(error));
     return { code: 500, list: [] };
   }
 }
@@ -186,7 +186,7 @@ export async function getTMDBUpcomingTVShows(
       list: data.results,
     };
   } catch (error) {
-    console.error('获取 TMDB 正在播出电视剧失败:', error);
+    console.error('获取 TMDB 正在播出电视剧失败:', redactForLog(error));
     return { code: 500, list: [] };
   }
 }
@@ -268,7 +268,7 @@ export async function getTMDBUpcomingContent(
       list: allContent,
     };
   } catch (error) {
-    console.error('获取 TMDB 即将上映内容失败:', error);
+    console.error('获取 TMDB 即将上映内容失败:', redactForLog(error));
     return { code: 500, list: [] };
   }
 }
@@ -314,7 +314,7 @@ export async function getTMDBVideos(
 
     return trailer?.key || null;
   } catch (error) {
-    console.error('获取 TMDB 视频失败:', error);
+    console.error('获取 TMDB 视频失败:', redactForLog(error));
     return null;
   }
 }
@@ -400,7 +400,7 @@ export async function getTMDBVideoList(
       videos,
     };
   } catch (error) {
-    console.error('获取 TMDB 视频列表失败:', error);
+    console.error('获取 TMDB 视频列表失败:', redactForLog(error));
     return { code: 500, videos: [] };
   }
 }
@@ -457,7 +457,7 @@ export async function getTMDBTrendingContent(
       list: items,
     };
   } catch (error) {
-    console.error('获取 TMDB 热门内容失败:', error);
+    console.error('获取 TMDB 热门内容失败:', redactForLog(error));
     return { code: 500, list: [] };
   }
 }
@@ -568,7 +568,7 @@ export async function searchTMDBMulti(
       results: data.results || [],
     };
   } catch (error) {
-    console.error('搜索 TMDB 内容失败:', error);
+    console.error('搜索 TMDB 内容失败:', redactForLog(error));
     return { code: 500, results: [] };
   }
 }
@@ -610,7 +610,7 @@ export async function getTMDBMovieRecommendations(
       results: data.results || [],
     };
   } catch (error) {
-    console.error('获取 TMDB 电影推荐失败:', error);
+    console.error('获取 TMDB 电影推荐失败:', redactForLog(error));
     return { code: 500, results: [] };
   }
 }
@@ -652,7 +652,7 @@ export async function getTMDBTVRecommendations(
       results: data.results || [],
     };
   } catch (error) {
-    console.error('获取 TMDB 电视剧推荐失败:', error);
+    console.error('获取 TMDB 电视剧推荐失败:', redactForLog(error));
     return { code: 500, results: [] };
   }
 }
@@ -694,7 +694,7 @@ export async function getTMDBMovieDetails(
       details: data,
     };
   } catch (error) {
-    console.error('获取 TMDB 电影详情失败:', error);
+    console.error('获取 TMDB 电影详情失败:', redactForLog(error));
     return { code: 500, details: null };
   }
 }
@@ -736,7 +736,7 @@ export async function getTMDBTVDetails(
       details: data,
     };
   } catch (error) {
-    console.error('获取 TMDB 电视剧详情失败:', error);
+    console.error('获取 TMDB 电视剧详情失败:', redactForLog(error));
     return { code: 500, details: null };
   }
 }
@@ -780,7 +780,7 @@ export async function getTMDBCredits(
       credits: data,
     };
   } catch (error) {
-    console.error('获取 TMDB 演职人员信息失败:', error);
+    console.error('获取 TMDB 演职人员信息失败:', redactForLog(error));
     return { code: 500, credits: null };
   }
 }
@@ -824,7 +824,7 @@ export async function getTMDBImages(
       images: data,
     };
   } catch (error) {
-    console.error('获取 TMDB 图片信息失败:', error);
+    console.error('获取 TMDB 图片信息失败:', redactForLog(error));
     return { code: 500, images: null };
   }
 }

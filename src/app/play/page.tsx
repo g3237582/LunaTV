@@ -99,6 +99,15 @@ import { getDoubanDetail } from '@/lib/douban.client';
 import { isEpisodeHiddenByFilter, normalizeEpisodeFilterConfig } from '@/lib/episode-filter';
 import { appendSpecialSourceParam, isSpecialSourceContext } from '@/lib/special-source.client';
 import {
+  DEFAULT_PANEL_SPEED_TEST_TIMEOUT_MS,
+  DEFAULT_PREFER_SPEED_TEST_TIMEOUT_MS,
+  isDirectplayDomainProxied as isStoredDirectplayProxyDomain,
+  prepareSpeedTestEpisodeUrl,
+  readStoredSpeedTestTimeoutMs,
+  resolveSpeedTestTimeoutMs,
+  sourceNeedsLongerSpeedTest,
+} from '@/lib/speed-test';
+import {
   buildEpisodeProgressContentKey,
   loadLocalEpisodeProgress,
   pruneLocalEpisodeProgressStorage,
@@ -2577,14 +2586,9 @@ function PlayPageClient() {
   const videoUrlRequestSeqRef = useRef(0);
   const lastVideoRequestKeyRef = useRef<string | null>(null);
 
-  // 直链代理域名记忆：检查某个域名是否需要代理
-  const isDirectplayDomainProxied = (url: string): boolean => {
-    try {
-      const domain = new URL(url).hostname;
-      const domains: string[] = JSON.parse(localStorage.getItem('directplay_proxy_domains') || '[]');
-      return domains.includes(domain);
-    } catch { return false; }
-  };
+  // 直链代理域名记忆：和测速共用同一份 localStorage 名单
+  const isDirectplayDomainProxied = (url: string): boolean =>
+    isStoredDirectplayProxyDomain(url);
   // 将域名记录到代理列表
   const addDirectplayProxyDomain = (url: string) => {
     try {
@@ -3369,25 +3373,35 @@ function PlayPageClient() {
     // 简单的正则或者后缀判断，如果明确不是 m3u8 (比如 mp4)，则不走 m3u8 代理
     const isM3u8 = episodeUrl.toLowerCase().includes('.m3u') || !episodeUrl.toLowerCase().match(/\.(mp4|flv|webm|mkv|avi|mov)(\?.*)?$/);
 
-    if (currentSource === 'directplay' && isM3u8) {
-      // 仅当 localStorage 记忆了该域名需要代理时才走代理
-      if (isDirectplayDomainProxied(episodeUrl)) {
-        const tokenParam = proxyToken ? `&token=${encodeURIComponent(proxyToken)}` : '';
-        episodeUrl = `/api/proxy-m3u8?url=${encodeURIComponent(episodeUrl)}&source=directplay${tokenParam}`;
-      } else {
-        // 直链模式且未走代理：跳过 HLS.js 探测。
-        // getVideoResolutionFromM3u8 内部使用 HLS.js (XMLHttpRequest) 加载，
-        // 而 XHR 受 CORS 限制，探测必然失败。实际播放器通过 <video src> 加载不受 CORS 影响。
-        console.log('[视频信息] 直链直连模式，跳过分辨率探测（避免 CORS 误报）');
-        setCurrentSourceVideoInfo(null);
-        return;
-      }
-    } else if (sourceProxyMode && isM3u8) {
-      episodeUrl = `/api/proxy/vod/m3u8?url=${encodeURIComponent(episodeUrl)}&source=${encodeURIComponent(currentSource)}`;
+    if (
+      currentSource === 'directplay' &&
+      isM3u8 &&
+      !isDirectplayDomainProxied(episodeUrl)
+    ) {
+      // 直链模式且未走代理：跳过 HLS.js 探测。
+      // getVideoResolutionFromM3u8 内部使用 HLS.js (XMLHttpRequest) 加载，
+      // 而 XHR 受 CORS 限制，探测必然失败。实际播放器通过 <video src> 加载不受 CORS 影响。
+      console.log('[视频信息] 直链直连模式，跳过分辨率探测（避免 CORS 误报）');
+      setCurrentSourceVideoInfo(null);
+      return;
     }
 
+    episodeUrl = prepareSpeedTestEpisodeUrl({
+      episodeUrl,
+      source: currentSource,
+      proxyMode: sourceProxyMode,
+      proxyToken,
+    });
+
     try {
-      const info = await getVideoResolutionFromM3u8(episodeUrl, 4000);
+      const info = await getVideoResolutionFromM3u8(
+        episodeUrl,
+        resolveSpeedTestTimeoutMs({
+          storedMs: readStoredSpeedTestTimeoutMs(),
+          fallbackMs: DEFAULT_PANEL_SPEED_TEST_TIMEOUT_MS,
+          special: sourceNeedsLongerSpeedTest(currentSource),
+        })
+      );
       setCurrentSourceVideoInfo(info);
     } catch (error) {
       console.error('获取视频信息失败:', error);
@@ -3444,7 +3458,7 @@ function PlayPageClient() {
       const validSpeeds = successfulResults
         .map((result) => {
           const speedStr = result.testResult.loadSpeed;
-          if (speedStr === '未知' || speedStr === '测量中...') return 0;
+          if (speedStr === '未知' || speedStr === '测量中...' || speedStr === '慢') return 0;
 
           const match = speedStr.match(/^([\d.]+)\s*(KB\/s|MB\/s)$/);
           if (!match) return 0;
@@ -3503,17 +3517,21 @@ function PlayPageClient() {
             ? source.episodes[1]
             : source.episodes[0];
 
-        const isM3u8 = episodeUrl.toLowerCase().includes('.m3u') || !episodeUrl.toLowerCase().match(/\.(mp4|flv|webm|mkv|avi|mov)(\?.*)?$/);
-        if (source.source === 'directplay' && isM3u8) {
-          if (isDirectplayDomainProxied(episodeUrl)) {
-            const tokenParam = proxyToken ? `&token=${encodeURIComponent(proxyToken)}` : '';
-            episodeUrl = `/api/proxy-m3u8?url=${encodeURIComponent(episodeUrl)}&source=directplay${tokenParam}`;
-          }
-        } else if (source.proxyMode && isM3u8) {
-          episodeUrl = `/api/proxy/vod/m3u8?url=${encodeURIComponent(episodeUrl)}&source=${encodeURIComponent(source.source)}`;
-        }
+        episodeUrl = prepareSpeedTestEpisodeUrl({
+          episodeUrl,
+          source: source.source,
+          proxyMode: source.proxyMode,
+          proxyToken,
+        });
 
-        const testResult = await getVideoResolutionFromM3u8(episodeUrl);
+        const testResult = await getVideoResolutionFromM3u8(
+          episodeUrl,
+          resolveSpeedTestTimeoutMs({
+            storedMs: readStoredSpeedTestTimeoutMs(),
+            fallbackMs: DEFAULT_PREFER_SPEED_TEST_TIMEOUT_MS,
+            special: sourceNeedsLongerSpeedTest(source.source),
+          })
+        );
 
         return {
           source,
@@ -3665,6 +3683,9 @@ function PlayPageClient() {
     // 下载速度评分 - 基于最大速度线性映射
     const speedScore = (() => {
       const speedStr = testResult.loadSpeed;
+      // 「慢」表示清单已到、分片没测完。给 0 分，避免没测完的源压过已经测出速度的源；
+      // 源本身仍留在候选里，不会被当成失败丢掉。
+      if (speedStr === '慢') return 0;
       if (speedStr === '未知' || speedStr === '测量中...') return 30;
 
       // 解析速度值

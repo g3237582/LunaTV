@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { redactForLog } from './redact-secrets';
 import { safeFetch } from './safe-http';
-
 import { getNextApiKey } from './tmdb.client';
 import { getTmdbImageBaseUrl } from './tmdb-image-base';
 
@@ -103,7 +103,7 @@ export async function searchTMDB(
       result: validResults[0],
     };
   } catch (error) {
-    console.error('TMDB 搜索异常:', error);
+    console.error('TMDB 搜索异常:', redactForLog(error));
     return { code: 500, result: null };
   }
 }
@@ -170,7 +170,7 @@ export async function getTVSeasons(
       seasons: validSeasons,
     };
   } catch (error) {
-    console.error('TMDB 获取季度列表异常:', error);
+    console.error('TMDB 获取季度列表异常:', redactForLog(error));
     return { code: 500, seasons: null };
   }
 }
@@ -208,7 +208,7 @@ export async function getTVSeasonDetails(
       season: data,
     };
   } catch (error) {
-    console.error('TMDB 获取季度详情异常:', error);
+    console.error('TMDB 获取季度详情异常:', redactForLog(error));
     return { code: 500, season: null };
   }
 }
@@ -265,7 +265,7 @@ export async function getTVEpisodeImages(
       stills,
     };
   } catch (error) {
-    console.error('TMDB 获取集数剧照异常:', error);
+    console.error('TMDB 获取集数剧照异常:', redactForLog(error));
     return { code: 500, stills: null };
   }
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 /* eslint-disable no-console,@typescript-eslint/no-var-requires */
+require('./src/lib/redact-secrets').installSecretLogRedaction();
 const http = require('http');
 const path = require('path');
 const { parseIsolatedSites } = require('./src/lib/site-runtime.js');

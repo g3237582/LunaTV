@@ -4068,7 +4068,7 @@ export const UserMenu: React.FC = () => {
 
                       <div className='flex items-center justify-between'>
                         <span className='text-xs text-gray-600 dark:text-gray-400'>
-                          换源面板测速超时
+                          测速超时
                         </span>
                         <span className='text-xs font-medium text-gray-700 dark:text-gray-300'>
                           {speedTestTimeout / 1000}秒
@@ -4137,7 +4137,7 @@ export const UserMenu: React.FC = () => {
                         </button>
                       </div>
                       <p className='text-xs text-gray-500 dark:text-gray-400 italic'>
-                        注：此设置仅对换源面板测速生效，优选播放源时仍使用4秒超时
+                        注：换源面板和优选都会使用这个时间。特殊源至少等待 20 秒，不超过 30 秒。
                       </p>
                     </div>
                   )}

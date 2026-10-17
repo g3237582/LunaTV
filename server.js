@@ -1,4 +1,5 @@
 // Next.js 自定义服务器 + Socket.IO
+require('./src/lib/redact-secrets').installSecretLogRedaction();
 const { createServer } = require('http');
 const { parse } = require('url');
 const next = require('next');
