@@ -8,6 +8,7 @@ import { searchFromApi } from '@/lib/downstream';
 import { getProxyToken } from '@/lib/emby-token';
 import { hasFeaturePermission } from '@/lib/permissions';
 import { rankBySearchMatch } from '@/lib/search-match';
+import { rejectUnauthorizedSpecialSearch } from '@/lib/special-source-api';
 import {
   executeSavedSourceScript,
   listEnabledSourceScripts,
@@ -29,7 +30,20 @@ export async function GET(request: NextRequest) {
   const specialOnly = searchParams.get('special') === '1';
   const privateOnly = searchParams.get('privateOnly') === '1';
 
+  // special=1 只搜特殊源；无权限统一 403。本接口不写搜索历史。
+  const specialRejection = await rejectUnauthorizedSpecialSearch(
+    authInfo.username,
+    specialOnly
+  );
+  if (specialRejection) return specialRejection;
+
   if (!query) {
+    if (specialOnly) {
+      return NextResponse.json(
+        { results: [] },
+        { headers: { 'Cache-Control': 'private, no-store' } }
+      );
+    }
     const cacheTime = await getCacheTime();
     return NextResponse.json(
       { results: [] },
@@ -199,7 +213,8 @@ export async function GET(request: NextRequest) {
     })
   );
 
-  const scriptSummaries = privateOnly ? [] : await listEnabledSourceScripts();
+  // 特殊源搜索只用 SpecialSourceApis 里的采集源，不混入脚本源。
+  const scriptSummaries = privateOnly || specialOnly ? [] : await listEnabledSourceScripts();
   const scriptPromises = scriptSummaries.map((script) =>
     Promise.race([
       (async () => {
@@ -297,8 +312,22 @@ export async function GET(request: NextRequest) {
     const cacheTime = await getCacheTime();
 
     if (flattenedResults.length === 0) {
-      // no cache if empty
+      // no cache if empty；特殊源仍禁止公共缓存
+      if (specialOnly) {
+        return NextResponse.json(
+          { results: [] },
+          { status: 200, headers: { 'Cache-Control': 'private, no-store' } }
+        );
+      }
       return NextResponse.json({ results: [] }, { status: 200 });
+    }
+
+    if (specialOnly) {
+      // 特殊源结果按用户源名单变化，不能进公共缓存。
+      return NextResponse.json(
+        { results: flattenedResults },
+        { headers: { 'Cache-Control': 'private, no-store' } }
+      );
     }
 
     return NextResponse.json(
