@@ -3,7 +3,10 @@
 import { Loader2, Pause, Play } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
-import { filterAdsFromM3U8Default } from '@/lib/hls-ad-filter';
+import {
+  createAdFilteringHlsLoader,
+  loadCustomAdFilterCode,
+} from '@/lib/hls-ad-filter.client';
 
 declare global {
   interface HTMLVideoElement {
@@ -23,10 +26,6 @@ function getSourceType(url: string, explicitType?: SourceType): SourceType {
   if (path.includes('.m3u8') || path.includes('.m3u') || lower.includes('/m3u8') || lower.includes('m3u8') || lower.includes('.m3u')) return 'm3u8';
   if (path.endsWith('.flv') || lower.includes('.flv?')) return 'flv';
   return 'native';
-}
-
-function filterAdsFromM3U8(m3u8Content: string): string {
-  return filterAdsFromM3U8Default('m3u8', m3u8Content);
 }
 
 export default function TVNativeVideo({
@@ -71,6 +70,19 @@ export default function TVNativeVideo({
   const [buffering, setBuffering] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState('');
+
+  // 后台配的自定义去广告代码（和 /play、/duanju/play 共用同一份缓存）
+  const customAdFilterCodeRef = useRef('');
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadCustomAdFilterCode().then((code) => {
+      if (!cancelled) customAdFilterCodeRef.current = code;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     onTimeRef.current = onTime;
@@ -156,24 +168,11 @@ export default function TVNativeVideo({
           const Hls = HlsModule.default;
           if (Hls.isSupported()) {
             const CustomLoader = adFilterEnabled
-              ? class TVAdFilterLoader extends Hls.DefaultConfig.loader {
-                  constructor(config: any) {
-                    super(config);
-                    const load = this.load.bind(this);
-                    this.load = (context: any, config: any, callbacks: any) => {
-                      if (context?.type === 'manifest' || context?.type === 'level') {
-                        const onSuccess = callbacks.onSuccess;
-                        callbacks.onSuccess = (response: any, stats: any, context: any, networkDetails: any) => {
-                          if (typeof response?.data === 'string') {
-                            response.data = filterAdsFromM3U8(response.data);
-                          }
-                          return onSuccess(response, stats, context, networkDetails);
-                        };
-                      }
-                      load(context, config, callbacks);
-                    };
-                  }
-                }
+              ? createAdFilteringHlsLoader(
+                  Hls,
+                  () => '',
+                  () => customAdFilterCodeRef.current
+                )
               : undefined;
             const hls = new Hls({
               enableWorker: true,
